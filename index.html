@@ -2186,6 +2186,11 @@
       enemies.push({ x, y });
     });
     const k = 1 - Math.exp(-dt / 0.12); // steering smoothness
+    // Separation: drones within this range of a sibling get pushed apart,
+    // so a full swarm chasing the same target spreads into a cluster
+    // instead of stacking directly on top of each other.
+    const SEP_RADIUS = DRONE_SIZE * 2.2;
+    const SEP_STRENGTH = 1.15;
     state.drones = state.drones.filter((d, i)=>{
       let best = null, bd = DRONE_RANGE * DRONE_RANGE;
       for (const e of enemies){
@@ -2202,8 +2207,17 @@
       }
       const dx = tx - d.x, dy = ty - d.y, len = Math.hypot(dx, dy) || 1;
       const want = best ? sp : Math.min(sp, len * 5);
-      d.vx += (dx/len * want - d.vx) * k;
-      d.vy += (dy/len * want - d.vy) * k;
+      let wx = dx/len * want, wy = dy/len * want;
+      for (const other of state.drones){
+        if (other === d) continue;
+        const ox = d.x - other.x, oy = d.y - other.y, odist = Math.hypot(ox, oy);
+        if (odist > 0 && odist < SEP_RADIUS){
+          const push = (1 - odist / SEP_RADIUS) * sp * SEP_STRENGTH;
+          wx += (ox / odist) * push; wy += (oy / odist) * push;
+        }
+      }
+      d.vx += (wx - d.vx) * k;
+      d.vy += (wy - d.vy) * k;
       d.x += d.vx * dt; d.y += d.vy * dt;
       if (Math.hypot(d.vx, d.vy) > 20) d.ang = Math.atan2(d.vy, d.vx);
       // touching any wall (arena edge or obstacle) kills the drone
