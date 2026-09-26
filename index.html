@@ -2650,12 +2650,12 @@
       if (p.presence.alive === false) return;
       if (p.presence.x === undefined) return;
       const s = state.remoteSmooth[p.peer] || { x: p.presence.x, y: p.presence.y, angle: p.presence.turretAngle||0 };
-      drawTank(s.x, s.y, s.angle, p.presence.color, nameLabel(p.peer, state.currentSector), p.presence.hp, p.presence.maxHp || MAX_HP, resolveLoadout(p.presence.score||0, p.presence.loadout7, p.presence.loadout14, p.presence.loadout20, p.presence.adminTank), p.presence.streak||0);
+      drawTank(s.x, s.y, s.angle, p.presence.color, nameLabel(p.peer, state.currentSector), p.presence.hp, p.presence.maxHp || MAX_HP, resolveLoadout(p.presence.score||0, p.presence.loadout7, p.presence.loadout14, p.presence.loadout20, p.presence.adminTank), p.presence.streak||0, !!p.presence.admin);
     });
 
     // my tank
     if (state.alive){
-      drawTank(state.x, state.y, state.turretAngle, state.color.id, nameLabel(state.myPeerId, state.currentSector), state.hp, effectiveMaxHp(), resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank), state.streak);
+      drawTank(state.x, state.y, state.turretAngle, state.color.id, nameLabel(state.myPeerId, state.currentSector), state.hp, effectiveMaxHp(), resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank), state.streak, state.adminUnlocked);
     }
 
     // CTF flags (drawn above tanks so a carried flag reads clearly)
@@ -2716,7 +2716,12 @@
     ctx.restore();
   }
 
-  function drawTank(x,y,turretAngle,colorId,name,hp,maxHp,loadoutId,streak){
+  // Cycles the hue of admin nameplates over time so it reads as a smooth
+  // rainbow rather than a flat color -- shared by every admin tank drawn
+  // in a given frame so they all stay in sync with each other.
+  function rainbowHue(t){ return (t / 20) % 360; }
+
+  function drawTank(x,y,turretAngle,colorId,name,hp,maxHp,loadoutId,streak,isAdmin){
     maxHp = maxHp || MAX_HP;
     loadoutId = LOADOUTS[loadoutId] ? loadoutId : 'single';
     ctx.save();
@@ -2748,7 +2753,7 @@
     const nameY = y - TANK_R - 14;
     ctx.textAlign = 'center';
     ctx.font = '10px JetBrains Mono, monospace';
-    ctx.fillStyle = pal.nameText;
+    ctx.fillStyle = isAdmin ? `hsl(${rainbowHue(state.lastFrame||0)}, 90%, 60%)` : pal.nameText;
     ctx.fillText(nameStr, x, nameY);
     if (streak >= 2){
       const nameW = ctx.measureText(nameStr).width;

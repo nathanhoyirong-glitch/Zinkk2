@@ -125,6 +125,9 @@ function broadcastLeaderboard() {
 
 const KNOWN_TANKS = new Set(['single', 'dual', 'triple', 'parallel', 'omni', 'triplet', 'quad', 'necro', 'octo']);
 function sanitizePresence(d) {
+  // 'admin' is server-controlled only (drives the rainbow name for other
+  // clients) -- never let a client hand it to us via a presence patch.
+  if ('admin' in d) delete d.admin;
   if ('adminTank' in d && d.adminTank !== null && !KNOWN_TANKS.has(d.adminTank)) delete d.adminTank;
   if ('roomId' in d && d.roomId !== null && !(typeof d.roomId === 'string' && ROOM_ID_RE.test(d.roomId))) delete d.roomId;
   if ('roomMeta' in d && d.roomMeta !== null) {
@@ -298,6 +301,7 @@ wss.on('connection', (ws, req) => {
                           : (typeof msg.password === 'string' && safeEq(msg.password, ADMIN_PASSWORD));
       if (ok) {
         p.admin = true; p.fails = 0;
+        p.presence.admin = true; broadcastPeers();
         ws.send(JSON.stringify({ type: 'adminResult', ok: true, token: ADMIN_TOKEN }));
       } else {
         p.fails = (p.fails || 0) + 1;
@@ -364,6 +368,7 @@ wss.on('connection', (ws, req) => {
     } else if (msg.type === 'adminLogout') {
       p.admin = false;
       p.presence.adminTank = null;
+      p.presence.admin = false;
       broadcastPeers();
     } else if (msg.type === 'register') {
       const username = typeof msg.username === 'string' ? msg.username.trim() : '';
@@ -376,6 +381,7 @@ wss.on('connection', (ws, req) => {
         }
         const acct = accounts.get(key);
         p.account = key; p.admin = true; p.fails = 0;
+        p.presence.admin = true; broadcastPeers();
         const token = createSession(key);
         ws.send(JSON.stringify({ type: 'authResult', ok: true, username: acct.username, kills: acct.kills, token, isAdmin: true, adminToken: ADMIN_TOKEN }));
         broadcastLeaderboard();
@@ -411,6 +417,7 @@ wss.on('connection', (ws, req) => {
         }
         const acct = accounts.get(key);
         p.account = key; p.admin = true; p.fails = 0;
+        p.presence.admin = true; broadcastPeers();
         const token = createSession(key);
         ws.send(JSON.stringify({ type: 'authResult', ok: true, username: acct.username, kills: acct.kills, token, isAdmin: true, adminToken: ADMIN_TOKEN }));
         return;
@@ -434,12 +441,12 @@ wss.on('connection', (ws, req) => {
       }
       p.account = key;
       const isAdminAcct = key === ADMIN_USERNAME.toLowerCase();
-      if (isAdminAcct) { p.admin = true; p.fails = 0; }
+      if (isAdminAcct) { p.admin = true; p.fails = 0; p.presence.admin = true; broadcastPeers(); }
       ws.send(JSON.stringify({ type: 'authResult', ok: true, username: acct.username, kills: acct.kills, token: msg.token, isAdmin: isAdminAcct, adminToken: isAdminAcct ? ADMIN_TOKEN : undefined }));
     } else if (msg.type === 'logoutAccount') {
       const wasAdminAcct = p.account === ADMIN_USERNAME.toLowerCase();
       p.account = null;
-      if (wasAdminAcct) { p.admin = false; p.presence.adminTank = null; broadcastPeers(); }
+      if (wasAdminAcct) { p.admin = false; p.presence.adminTank = null; p.presence.admin = false; broadcastPeers(); }
     } else if (msg.type === 'adminDelete') {
       // admin-only; deletes the ACCOUNT (not just disconnects them), by
       // username rather than peer id, since the target may not even be
