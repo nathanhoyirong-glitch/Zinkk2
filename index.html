@@ -509,7 +509,6 @@
           <b id="hudRoomName">SECTOR</b><span id="hudSelfHealth">HP 100</span>
           <span class="match-timer" id="matchTimer"></span>
           <span class="match-timer" id="droneCount"></span>
-          <span class="match-timer" id="factoryCount"></span>
           <span class="match-timer" id="zoneWarn"></span>
         </div>
         <div class="score-strip" id="scoreStrip"></div>
@@ -737,27 +736,6 @@
   const DRONE_SIZE = 17.6;                 // drone square side; hull square side is 32 -> 0.55 ratio
   const LOADOUT20_KILLS = 20; // kills needed to become the Necromancer (square bullets only)
   const LOADOUT14_KILLS = 14; // kills needed to unlock the 14-kill cannon (pick triplet or quad)
-
-  // ---- Factory (30-kill milestone) ----
-  // Automatic, no choice screen -- once unlocked the player becomes a
-  // "factory" (diep.io style): it periodically launches a half-size
-  // single-barrel mini tank out of its own hull. Each mini is a fully
-  // autonomous little turret -- same AI shape as the necromancer's drones
-  // (hunt the nearest enemy in range, else hover in a loose ring near the
-  // owner when nothing's around) -- except instead of ramming its target
-  // for contact damage, it holds off at range and shoots real bullets from
-  // its own barrel.
-  const LOADOUT30_KILLS = 30;              // kills needed to unlock the Factory
-  const MAX_MINIS = 20;                    // per player -- factory tank cap
-  const MINI_SPAWN_INTERVAL = 1600;        // ms between new mini tanks while under the cap
-  const MINI_SCALE = 0.5;                  // half the normal hull size
-  const MINI_R = TANK_R * MINI_SCALE;      // mini hull collision/visual radius
-  const MINI_RANGE = 8 * GRID_SIZE;        // minis chase/shoot enemies within this range
-  const MINI_STANDOFF = MINI_RANGE * 0.5;  // stop closing in once this close -- hold range and shoot
-  const MINI_ORBIT_RADIUS = GRID_SIZE * 2.6; // idle hover ring distance from the owner
-  const MINI_FIRE_COOLDOWN = 700;          // ms between shots, per mini
-  const MINI_DAMAGE_RATIO = 0.4;           // mini bullets deal this fraction of the owner's damage
-
 
   const UPGRADE_POOL = [
     { id:'firerate', label:'+15% FIRE RATE', apply(u){ u.fireRateMult *= 0.85; } },
@@ -1096,9 +1074,6 @@
     remoteDrones: {},     // "peer:droneId" -> {x,y} smoothed render position
     consumedDrones: {},   // "peer:droneId" -> expiry ms (already hit me, waiting for owner to remove)
     unsubDrone: null,
-    minis: [],             // my own factory mini tanks: {id,x,y,vx,vy,ang,aimAng,lastShot}
-    miniSeq: 0, miniSide: 0, minisSent: false, lastMiniSpawn: 0,
-    remoteMinis: {},        // "peer:miniId" -> {x,y} smoothed render position
     bullets: [],          // {id, shooterId, shooterName, x,y,vx,vy,color,born}
     sparks: [],            // {x,y,born,color}
     killfeed: [],           // {text, born}
@@ -1612,13 +1587,12 @@
     state.x = spawn.x; state.y = spawn.y; state.turretAngle = 0;
     state.upgrades = freshUpgrades();
     state.loadout7 = null; state.loadout14 = null; state.loadout20 = null; state.adminTank = null; state.drones = []; state.dronesSent = false; state.consumedDrones = {}; state.remoteDrones = {};
-    state.minis = []; state.minisSent = false; state.lastMiniSpawn = 0; state.remoteMinis = {};
     state.hp = effectiveMaxHp(); state.alive = true; state.score = 0; state.streak = 0;
     state.joinedAt = Date.now();
 
     await state.room.presence({
       roomId: sector, roomMeta: meta, name: state.name, color: color.id, team, carrying: null, captures: 0,
-      loadout7: null, loadout14: null, loadout20: null, adminTank: null, drones: [], minis: [],
+      loadout7: null, loadout14: null, loadout20: null, adminTank: null, drones: [],
       x: state.x, y: state.y, turretAngle: state.turretAngle,
       hp: state.hp, maxHp: effectiveMaxHp(), alive: true, score: 0, streak: 0, joinedAt: state.joinedAt
     });
@@ -1812,9 +1786,6 @@
         }
         if (state.score === LOADOUT20_KILLS){
           offerLoadoutChoice(20);
-        }
-        if (state.score === LOADOUT30_KILLS){
-          showToast('FACTORY UNLOCKED — drone tanks now launch from your barrel and hunt enemies (cap ' + MAX_MINIS + ')');
         }
       }
       renderScoreStrip();
@@ -2337,186 +2308,6 @@
     ctx.restore();
   }
 
-  // ---------------------------------------------------------------
-  // Factory mini tanks. Same trust model as drones/bullets: each player
-  // simulates their OWN minis (movement + aim + firing) and publishes
-  // positions in presence.minis; everyone else just renders them. Minis
-  // fire real bullets through the normal spawnBullet/'shoot' pipeline
-  // (shooterId = the factory's own peer id), so hit detection, damage,
-  // kill-crediting and score progression all reuse the existing bullet
-  // code with no separate path required.
-  // ---------------------------------------------------------------
-  function hasFactory(){ return state.adminTank === 'factory' || state.score >= LOADOUT30_KILLS; }
-
-  function clearMyMinis(){
-    state.minis = [];
-    state.minisSent = false;
-    if (state.room) state.room.presence({ minis: [] });
-  }
-
-  // kept minimal: updateMinis below does its own enemy scan inline since
-  // it needs to share one list across the whole swarm each frame.
-
-  function fireMini(){
-    // launches out of the hull like a shot, alternating sides, exactly
-    // like fireDrone -- then updateMinis' own steering takes over
-    state.miniSide ^= 1;
-    const a = state.turretAngle + (state.miniSide ? Math.PI : 0);
-    const dist = TANK_R + MINI_R + 2;
-    const spd = effectiveMoveSpeed();
-    state.minis.push({
-      id: ++state.miniSeq,
-      x: state.x + Math.cos(a) * dist, y: state.y + Math.sin(a) * dist,
-      vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, ang: a, aimAng: a,
-      lastShot: performance.now()
-    });
-  }
-
-  function updateMinis(dt){
-    const hud = byId('factoryCount');
-    if (hud) hud.textContent = (hasFactory() && state.currentSector) ? 'FACTORY ' + state.minis.length + '/' + MAX_MINIS : '';
-    if (!hasFactory()){
-      if (state.minis.length) clearMyMinis();
-      return;
-    }
-    const now = performance.now();
-    // roll out a new mini every MINI_SPAWN_INTERVAL while under the cap
-    if (state.minis.length < MAX_MINIS && now - state.lastMiniSpawn > MINI_SPAWN_INTERVAL){
-      state.lastMiniSpawn = now;
-      fireMini();
-    }
-    if (!state.minis.length) return;
-
-    const half = MINI_R;
-    const speed = effectiveMoveSpeed();
-    const enemies = [];
-    peersIn(state.currentSector).forEach(p=>{
-      if (p.isMe || p.presence.alive === false) return;
-      const ps = state.remoteSmooth[p.peer];
-      const x = ps ? ps.x : p.presence.x, y = ps ? ps.y : p.presence.y;
-      if (x === undefined || y === undefined) return;
-      enemies.push({ x, y });
-    });
-    const k = 1 - Math.exp(-dt / 0.12); // steering smoothness, same feel as drones
-    const SEP_RADIUS = MINI_R * 4.4, SEP_STRENGTH = 1.15;
-    const TANK_AVOID_RADIUS = TANK_R + half + 4;
-    const shotsToEmit = [];
-
-    state.minis = state.minis.filter((m)=>{
-      let best = null, bd = MINI_RANGE * MINI_RANGE;
-      for (const e of enemies){
-        const dx = e.x - m.x, dy = e.y - m.y, dd = dx*dx + dy*dy;
-        if (dd < bd){ bd = dd; best = e; }
-      }
-      let tx, ty, sp;
-      if (best){
-        const dist = Math.sqrt(bd);
-        if (dist > MINI_STANDOFF){
-          tx = best.x; ty = best.y; sp = speed;               // close in
-        } else {
-          tx = m.x; ty = m.y; sp = 0;                          // hold range, let separation spread them out
-        }
-        m.aimAng = Math.atan2(best.y - m.y, best.x - m.x);     // always aim at target, whether closing or holding
-      } else {
-        // nothing in range: hover in a ring around the owner, like a drone
-        const oa = now / 1000 * 0.9 + m.id * 2.399;
-        tx = state.x + Math.cos(oa) * MINI_ORBIT_RADIUS;
-        ty = state.y + Math.sin(oa) * MINI_ORBIT_RADIUS;
-        sp = speed * 0.8;
-      }
-      const dx = tx - m.x, dy = ty - m.y, len = Math.hypot(dx, dy) || 1;
-      const want = best ? sp : Math.min(sp, len * 5);
-      let wx = (sp === 0) ? 0 : dx/len * want, wy = (sp === 0) ? 0 : dy/len * want;
-      // sibling separation, same as drones, so a swarm spreads instead of stacking
-      for (const other of state.minis){
-        if (other === m) continue;
-        const ox = m.x - other.x, oy = m.y - other.y, odist = Math.hypot(ox, oy);
-        if (odist > 0 && odist < SEP_RADIUS){
-          const push = (1 - odist / SEP_RADIUS) * speed * SEP_STRENGTH;
-          wx += (ox / odist) * push; wy += (oy / odist) * push;
-        }
-      }
-      // push off my own hull if a mini drifts too close to it
-      {
-        const hx = m.x - state.x, hy = m.y - state.y, hdist = Math.hypot(hx, hy);
-        if (hdist > 0 && hdist < TANK_AVOID_RADIUS){
-          const push = (1 - hdist / TANK_AVOID_RADIUS) * speed * SEP_STRENGTH;
-          wx += (hx / hdist) * push; wy += (hy / hdist) * push;
-        }
-      }
-      m.vx += (wx - m.vx) * k;
-      m.vy += (wy - m.vy) * k;
-      m.x += m.vx * dt; m.y += m.vy * dt;
-      if (Math.hypot(m.vx, m.vy) > 20) m.ang = Math.atan2(m.vy, m.vx);
-      if (!best) m.aimAng = m.ang; // no target: barrel just follows travel heading
-
-      // fire on whatever it's currently tracking
-      if (best && now - m.lastShot > MINI_FIRE_COOLDOWN){
-        m.lastShot = now;
-        const bdist = SPRITE_SINGLE_TIP_RATIO * MINI_R;
-        const bx = m.x + Math.cos(m.aimAng) * bdist;
-        const by = m.y + Math.sin(m.aimAng) * bdist;
-        shotsToEmit.push({ id: (state.myPeerId||'me') + '-mini-' + m.id + '-' + now.toFixed(0), x: bx, y: by, angle: m.aimAng });
-      }
-
-      // touching a wall or obstacle takes a mini out, same as drones
-      let dead = m.x - half < 0 || m.x + half > ARENA_W || m.y - half < 0 || m.y + half > ARENA_H;
-      if (!dead){
-        for (const o of OBSTACLES){ if (rectCircleCollide(m.x, m.y, half, o)){ dead = true; break; } }
-      }
-      if (dead){ spawnSpark(m.x, m.y, state.color.hex); return false; }
-      return true;
-    });
-
-    if (shotsToEmit.length){
-      const spd = effectiveBulletSpeed();
-      const dmg = Math.max(1, Math.round(effectiveDamage() * MINI_DAMAGE_RATIO));
-      shotsToEmit.forEach(s=>{
-        spawnBullet(s.id, state.myPeerId, state.name, s.x, s.y, s.angle, state.color.hex, spd, dmg, false, state.team);
-      });
-      if (state.room){
-        state.room.emit('shoot', {
-          shots: shotsToEmit, shooterId: state.myPeerId, shooterName: state.name,
-          color: state.color.id, team: state.team, roomId: state.currentSector, speed: spd, damage: dmg, square: false
-        });
-      }
-    }
-  }
-
-  // smooth other players' minis between presence updates
-  function updateRemoteMinis(dt){
-    const seen = new Set();
-    const k = 1 - Math.exp(-dt / REMOTE_SMOOTH_TIME);
-    peersIn(state.currentSector).forEach(p=>{
-      if (p.isMe || !Array.isArray(p.presence.minis)) return;
-      p.presence.minis.forEach(mn=>{
-        const key = p.peer + ':' + mn[0];
-        seen.add(key);
-        const s = state.remoteMinis[key];
-        if (!s) state.remoteMinis[key] = { x: mn[1], y: mn[2] };
-        else { s.x += (mn[1] - s.x) * k; s.y += (mn[2] - s.y) * k; }
-      });
-    });
-    Object.keys(state.remoteMinis).forEach(key=>{ if (!seen.has(key)) delete state.remoteMinis[key]; });
-  }
-
-  function drawMiniTank(x, y, ang, colorId){
-    const def = LOADOUTS.single;
-    const set = state.spritesByLoadout.single;
-    const sprite = state.spritesReady ? (set[colorId] || set[PALETTE[0].id]) : null;
-    const scale = MINI_R / def.radius;
-    ctx.save();
-    ctx.translate(x, y);
-    if (sprite){
-      ctx.rotate(ang + def.rotOffset);
-      ctx.drawImage(sprite, -def.cx*scale, -def.cy*scale, def.w*scale, def.h*scale);
-    } else {
-      ctx.fillStyle = colorHex(colorId);
-      ctx.beginPath(); ctx.arc(0,0,MINI_R,0,Math.PI*2); ctx.fill();
-    }
-    ctx.restore();
-  }
-
   function rectCircleCollide(cx, cy, r, rect){
     const nx = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
     const ny = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
@@ -2625,9 +2416,7 @@
   function update(dt){
     updateRemoteSmoothing(dt);
     updateRemoteDrones(dt);
-    updateRemoteMinis(dt);
     if (state.alive) updateDrones(dt);
-    if (state.alive) updateMinis(dt);
     if (state.alive){
       updateFlags();
       let dx = state.moveVec.mag > 0.12 ? state.moveVec.x : 0;
@@ -2661,10 +2450,6 @@
           patch.drones = state.drones.map(d=>[d.id, Math.round(d.x*10)/10, Math.round(d.y*10)/10, Math.round(d.ang*100)/100, d.hp, d.maxHp]);
           patch.droneDmg = effectiveDamage() * 2; // drones hit twice as hard as bullets
           state.dronesSent = state.drones.length > 0;
-        }
-        if (state.minis.length || state.minisSent){
-          patch.minis = state.minis.map(m=>[m.id, Math.round(m.x*10)/10, Math.round(m.y*10)/10, Math.round((m.aimAng!==undefined?m.aimAng:m.ang)*100)/100]);
-          state.minisSent = state.minis.length > 0;
         }
         state.room.presence(patch);
       }
@@ -2755,7 +2540,6 @@
       state.alive = false;
       state.streak = 0;
       clearMyDrones();
-      clearMyMinis();
       const patch = { alive: false, hp: 0, streak: 0 };
       if (state.carrying){
         // die while carrying a flag -- it returns straight home
@@ -2925,16 +2709,6 @@
       });
     });
 
-    // factory mini tanks (mine, then everyone else's)
-    state.minis.forEach(m=> drawMiniTank(m.x, m.y, m.aimAng !== undefined ? m.aimAng : m.ang, state.color.id));
-    peersIn(state.currentSector).forEach(p=>{
-      if (p.isMe || !Array.isArray(p.presence.minis)) return;
-      p.presence.minis.forEach(mn=>{
-        const s = state.remoteMinis[p.peer + ':' + mn[0]];
-        drawMiniTank(s ? s.x : mn[1], s ? s.y : mn[2], mn[3] || 0, p.presence.color);
-      });
-    });
-
     // sparks
     const now = performance.now();
     state.sparks.forEach(s=>{
@@ -3033,8 +2807,6 @@
     if (state.unsubChat) state.unsubChat();
     clearMyDrones();
     state.remoteDrones = {}; state.consumedDrones = {};
-    clearMyMinis();
-    state.remoteMinis = {};
     state.currentSector = null;
     state.roomMode = null; state.team = null; state.carrying = null; state.captures = 0;
     state.bullets = []; state.sparks = []; state.killfeed = [];
@@ -3408,7 +3180,7 @@
   // ---------------------------------------------------------------
   const ADMIN_TANKS = [
     ['single','SINGLE'], ['dual','TWIN'], ['triple','TRIPLE'], ['parallel','DIAGONAL'], ['omni','OMNI'],
-    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['factory','FACTORY'],
+    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'],
   ];
   function openCmd(prefill){
     if (!state.currentSector) return;

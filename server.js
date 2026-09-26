@@ -123,7 +123,7 @@ function broadcastLeaderboard() {
   sendAll({ type: 'leaderboard', top: leaderboardPayload() });
 }
 
-const KNOWN_TANKS = new Set(['single', 'dual', 'triple', 'parallel', 'omni', 'triplet', 'quad', 'necro', 'octo', 'factory']);
+const KNOWN_TANKS = new Set(['single', 'dual', 'triple', 'parallel', 'omni', 'triplet', 'quad', 'necro', 'octo']);
 function sanitizePresence(d) {
   // 'admin' is server-controlled only (drives the rainbow name for other
   // clients) -- never let a client hand it to us via a presence patch.
