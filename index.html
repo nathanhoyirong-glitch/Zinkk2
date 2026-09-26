@@ -731,7 +731,7 @@
   const LOADOUT7_KILLS = 7;  // kills needed to auto-unlock the triple cannon
   const GRID_SIZE = 30;                    // map grid square, world units (matches the drawn grid)
   const DRONE_RANGE = 10 * GRID_SIZE;      // drones chase anything within 10 map squares
-  const MAX_DRONES = 10;                   // per player
+  const MAX_DRONES = 20;                   // per player
   const DRONE_HP_RATIO = 0.5;              // a drone has half of its owner's max health
   const DRONE_SIZE = 17.6;                 // drone square side; hull square side is 32 -> 0.55 ratio
   const DRONE_SPEED_RATIO = 0.55;          // drone speed as a fraction of the bullet speed
@@ -2089,7 +2089,7 @@
     if (now - state.lastShot < effectiveFireCooldown()) return;
     const loadoutId = resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank);
     if (loadoutId === 'necro'){
-      if (state.drones.length >= MAX_DRONES) return; // 10 out at once, no more until some die
+      if (state.drones.length >= MAX_DRONES) return; // 20 out at once, no more until some die
       state.lastShot = now;
       fireDrone();
       return;
