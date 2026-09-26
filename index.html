@@ -740,22 +740,24 @@
 
   // ---- Factory (30-kill milestone) ----
   // Automatic, no choice screen -- once unlocked the player becomes a
-  // "factory" that periodically rolls out half-size single-barrel mini
-  // tanks. Each mini trails behind whatever is directly in front of it in
-  // the chain (the factory itself for the first one), so the whole convoy
-  // snakes along behind the player, and independently aims its own barrel
-  // at the nearest enemy in range and fires -- it does NOT ram like a
-  // necromancer drone, it's a small ranged unit.
+  // "factory" (diep.io style): it periodically launches a half-size
+  // single-barrel mini tank out of its own hull. Each mini is a fully
+  // autonomous little turret -- same AI shape as the necromancer's drones
+  // (hunt the nearest enemy in range, else hover in a loose ring near the
+  // owner when nothing's around) -- except instead of ramming its target
+  // for contact damage, it holds off at range and shoots real bullets from
+  // its own barrel.
   const LOADOUT30_KILLS = 30;              // kills needed to unlock the Factory
   const MAX_MINIS = 20;                    // per player -- factory tank cap
-  const MINI_SPAWN_INTERVAL = 3200;        // ms between new mini tanks while under the cap
+  const MINI_SPAWN_INTERVAL = 1600;        // ms between new mini tanks while under the cap
   const MINI_SCALE = 0.5;                  // half the normal hull size
   const MINI_R = TANK_R * MINI_SCALE;      // mini hull collision/visual radius
-  const MINI_GAP = TANK_R * 1.7;           // trailing distance between chain links
-  const MINI_RANGE = 8 * GRID_SIZE;        // minis only shoot at enemies within this range
-  const MINI_FIRE_COOLDOWN = 900;          // ms between shots, per mini
+  const MINI_RANGE = 8 * GRID_SIZE;        // minis chase/shoot enemies within this range
+  const MINI_STANDOFF = MINI_RANGE * 0.5;  // stop closing in once this close -- hold range and shoot
+  const MINI_ORBIT_RADIUS = GRID_SIZE * 2.6; // idle hover ring distance from the owner
+  const MINI_FIRE_COOLDOWN = 700;          // ms between shots, per mini
   const MINI_DAMAGE_RATIO = 0.4;           // mini bullets deal this fraction of the owner's damage
-  const MINI_FOLLOW_SMOOTH = 0.15;         // seconds to close ~63% of the gap to its leader
+
 
   const UPGRADE_POOL = [
     { id:'firerate', label:'+15% FIRE RATE', apply(u){ u.fireRateMult *= 0.85; } },
@@ -1094,8 +1096,8 @@
     remoteDrones: {},     // "peer:droneId" -> {x,y} smoothed render position
     consumedDrones: {},   // "peer:droneId" -> expiry ms (already hit me, waiting for owner to remove)
     unsubDrone: null,
-    minis: [],             // my own factory mini tanks: {id,x,y,ang,aimAng,lastShot}
-    miniSeq: 0, minisSent: false, lastMiniSpawn: 0,
+    minis: [],             // my own factory mini tanks: {id,x,y,vx,vy,ang,aimAng,lastShot}
+    miniSeq: 0, miniSide: 0, minisSent: false, lastMiniSpawn: 0,
     remoteMinis: {},        // "peer:miniId" -> {x,y} smoothed render position
     bullets: [],          // {id, shooterId, shooterName, x,y,vx,vy,color,born}
     sparks: [],            // {x,y,born,color}
@@ -1812,7 +1814,7 @@
           offerLoadoutChoice(20);
         }
         if (state.score === LOADOUT30_KILLS){
-          showToast('FACTORY UNLOCKED — mini tanks roll out behind you (cap ' + MAX_MINIS + ')');
+          showToast('FACTORY UNLOCKED — drone tanks now launch from your barrel and hunt enemies (cap ' + MAX_MINIS + ')');
         }
       }
       renderScoreStrip();
@@ -2352,19 +2354,22 @@
     if (state.room) state.room.presence({ minis: [] });
   }
 
-  // nearest living enemy to an arbitrary point, within range -- used by
-  // each mini to pick its own target independent of the owner's aim.
-  function nearestEnemyFor(x, y, maxRange){
-    let best = null, bd = maxRange * maxRange;
-    peersIn(state.currentSector).forEach(p=>{
-      if (p.isMe || p.presence.alive === false) return;
-      const ps = state.remoteSmooth[p.peer];
-      const ex = ps ? ps.x : p.presence.x, ey = ps ? ps.y : p.presence.y;
-      if (ex === undefined || ey === undefined) return;
-      const dx = ex - x, dy = ey - y, dd = dx*dx + dy*dy;
-      if (dd < bd){ bd = dd; best = { x: ex, y: ey }; }
+  // kept minimal: updateMinis below does its own enemy scan inline since
+  // it needs to share one list across the whole swarm each frame.
+
+  function fireMini(){
+    // launches out of the hull like a shot, alternating sides, exactly
+    // like fireDrone -- then updateMinis' own steering takes over
+    state.miniSide ^= 1;
+    const a = state.turretAngle + (state.miniSide ? Math.PI : 0);
+    const dist = TANK_R + MINI_R + 2;
+    const spd = effectiveMoveSpeed();
+    state.minis.push({
+      id: ++state.miniSeq,
+      x: state.x + Math.cos(a) * dist, y: state.y + Math.sin(a) * dist,
+      vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, ang: a, aimAng: a,
+      lastShot: performance.now()
     });
-    return best;
   }
 
   function updateMinis(dt){
@@ -2378,41 +2383,79 @@
     // roll out a new mini every MINI_SPAWN_INTERVAL while under the cap
     if (state.minis.length < MAX_MINIS && now - state.lastMiniSpawn > MINI_SPAWN_INTERVAL){
       state.lastMiniSpawn = now;
-      const tail = state.minis.length ? state.minis[state.minis.length - 1] : { x: state.x, y: state.y, moveAng: state.moveAngle };
-      const backAng = (tail.moveAng !== undefined ? tail.moveAng : state.moveAngle) + Math.PI;
-      state.minis.push({
-        id: ++state.miniSeq,
-        x: tail.x + Math.cos(backAng) * MINI_GAP,
-        y: tail.y + Math.sin(backAng) * MINI_GAP,
-        moveAng: tail.moveAng !== undefined ? tail.moveAng : state.moveAngle,
-        aimAng: state.turretAngle,
-        lastShot: now
-      });
+      fireMini();
     }
+    if (!state.minis.length) return;
 
     const half = MINI_R;
-    const k = 1 - Math.exp(-dt / MINI_FOLLOW_SMOOTH);
+    const speed = effectiveMoveSpeed();
+    const enemies = [];
+    peersIn(state.currentSector).forEach(p=>{
+      if (p.isMe || p.presence.alive === false) return;
+      const ps = state.remoteSmooth[p.peer];
+      const x = ps ? ps.x : p.presence.x, y = ps ? ps.y : p.presence.y;
+      if (x === undefined || y === undefined) return;
+      enemies.push({ x, y });
+    });
+    const k = 1 - Math.exp(-dt / 0.12); // steering smoothness, same feel as drones
+    const SEP_RADIUS = MINI_R * 4.4, SEP_STRENGTH = 1.15;
+    const TANK_AVOID_RADIUS = TANK_R + half + 4;
     const shotsToEmit = [];
-    state.minis = state.minis.filter((m, i)=>{
-      // follow the leader (the factory itself, or the mini in front of it)
-      const leader = i === 0 ? { x: state.x, y: state.y, ang: state.moveAngle } : state.minis[i-1];
-      const desiredX = leader.x - Math.cos(leader.ang !== undefined ? leader.ang : leader.moveAng) * MINI_GAP;
-      const desiredY = leader.y - Math.sin(leader.ang !== undefined ? leader.ang : leader.moveAng) * MINI_GAP;
-      const oldX = m.x, oldY = m.y;
-      m.x += (desiredX - m.x) * k;
-      m.y += (desiredY - m.y) * k;
-      const movedX = m.x - oldX, movedY = m.y - oldY;
-      if (movedX*movedX + movedY*movedY > 0.25) m.moveAng = Math.atan2(movedY, movedX);
-      m.ang = m.moveAng; // alias so this mini can serve as the next one's leader
 
-      // independently aim at, and fire on, the nearest enemy in range
-      const target = nearestEnemyFor(m.x, m.y, MINI_RANGE);
-      m.aimAng = target ? Math.atan2(target.y - m.y, target.x - m.x) : m.moveAng;
-      if (target && now - m.lastShot > MINI_FIRE_COOLDOWN){
+    state.minis = state.minis.filter((m)=>{
+      let best = null, bd = MINI_RANGE * MINI_RANGE;
+      for (const e of enemies){
+        const dx = e.x - m.x, dy = e.y - m.y, dd = dx*dx + dy*dy;
+        if (dd < bd){ bd = dd; best = e; }
+      }
+      let tx, ty, sp;
+      if (best){
+        const dist = Math.sqrt(bd);
+        if (dist > MINI_STANDOFF){
+          tx = best.x; ty = best.y; sp = speed;               // close in
+        } else {
+          tx = m.x; ty = m.y; sp = 0;                          // hold range, let separation spread them out
+        }
+        m.aimAng = Math.atan2(best.y - m.y, best.x - m.x);     // always aim at target, whether closing or holding
+      } else {
+        // nothing in range: hover in a ring around the owner, like a drone
+        const oa = now / 1000 * 0.9 + m.id * 2.399;
+        tx = state.x + Math.cos(oa) * MINI_ORBIT_RADIUS;
+        ty = state.y + Math.sin(oa) * MINI_ORBIT_RADIUS;
+        sp = speed * 0.8;
+      }
+      const dx = tx - m.x, dy = ty - m.y, len = Math.hypot(dx, dy) || 1;
+      const want = best ? sp : Math.min(sp, len * 5);
+      let wx = (sp === 0) ? 0 : dx/len * want, wy = (sp === 0) ? 0 : dy/len * want;
+      // sibling separation, same as drones, so a swarm spreads instead of stacking
+      for (const other of state.minis){
+        if (other === m) continue;
+        const ox = m.x - other.x, oy = m.y - other.y, odist = Math.hypot(ox, oy);
+        if (odist > 0 && odist < SEP_RADIUS){
+          const push = (1 - odist / SEP_RADIUS) * speed * SEP_STRENGTH;
+          wx += (ox / odist) * push; wy += (oy / odist) * push;
+        }
+      }
+      // push off my own hull if a mini drifts too close to it
+      {
+        const hx = m.x - state.x, hy = m.y - state.y, hdist = Math.hypot(hx, hy);
+        if (hdist > 0 && hdist < TANK_AVOID_RADIUS){
+          const push = (1 - hdist / TANK_AVOID_RADIUS) * speed * SEP_STRENGTH;
+          wx += (hx / hdist) * push; wy += (hy / hdist) * push;
+        }
+      }
+      m.vx += (wx - m.vx) * k;
+      m.vy += (wy - m.vy) * k;
+      m.x += m.vx * dt; m.y += m.vy * dt;
+      if (Math.hypot(m.vx, m.vy) > 20) m.ang = Math.atan2(m.vy, m.vx);
+      if (!best) m.aimAng = m.ang; // no target: barrel just follows travel heading
+
+      // fire on whatever it's currently tracking
+      if (best && now - m.lastShot > MINI_FIRE_COOLDOWN){
         m.lastShot = now;
-        const dist = SPRITE_SINGLE_TIP_RATIO * MINI_R;
-        const bx = m.x + Math.cos(m.aimAng) * dist;
-        const by = m.y + Math.sin(m.aimAng) * dist;
+        const bdist = SPRITE_SINGLE_TIP_RATIO * MINI_R;
+        const bx = m.x + Math.cos(m.aimAng) * bdist;
+        const by = m.y + Math.sin(m.aimAng) * bdist;
         shotsToEmit.push({ id: (state.myPeerId||'me') + '-mini-' + m.id + '-' + now.toFixed(0), x: bx, y: by, angle: m.aimAng });
       }
 
