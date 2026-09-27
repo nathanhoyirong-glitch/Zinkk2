@@ -1526,7 +1526,7 @@
           peersList = (msg.list||[]).map(p=>({ peer: p.peer, isMe: p.peer === myPeer, presence: p.presence||{} }));
           firePeers();
         } else if (msg.type === 'match' || msg.type === 'matchEnd' || msg.type === 'adminResult' || msg.type === 'adminKill' || msg.type === 'adminBanList' || msg.type === 'adminUnbanResult' ||
-                   msg.type === 'authResult' || msg.type === 'leaderboard' || msg.type === 'accountKills' || msg.type === 'accountDeleted' || msg.type === 'adminDeleteResult'){
+                   msg.type === 'authResult' || msg.type === 'leaderboard' || msg.type === 'accountKills' || msg.type === 'accountDeleted' || msg.type === 'adminDeleteResult' || msg.type === 'adminBanResult'){
           serverListeners.forEach(cb=>{ try{ cb(msg); }catch(e){} });
         } else if (msg.type === 'banned'){
           banned = true;
@@ -3118,6 +3118,7 @@
     if (msg.type === 'adminKill'){ handleAdminKill(); return; }
     if (msg.type === 'banned'){ handleBanned(); return; }
     if (msg.type === 'adminBanList'){ showBanPanel(msg.bans || []); return; }
+    if (msg.type === 'adminBanResult'){ handleAdminBanResult(msg); return; }
     if (msg.type === 'adminUnbanResult'){ handleUnbanResult(msg); return; }
     if (msg.type === 'authResult'){ handleAuthResult(msg); return; }
     if (msg.type === 'leaderboard'){ state.leaderboard = msg.top || []; renderLeaderboard(); return; }
@@ -3637,18 +3638,20 @@
     applyDamage(null, 'ADMIN', 99999);   // no shooter id, so nobody is credited with the kill
   }
 
-  // ---- /ban @player (admin only; enforced again by the server) ----
+  // ---- /ban @username (admin only; enforced again by the server) ----
+  // Bans the ACCOUNT by username, not a peer in the current room -- this
+  // works even if the target is offline, or online but somewhere else on
+  // the server entirely. See handleAdminBanResult for the reply.
   function adminBan(query){
     if (!state.currentSector) return;
     if (!ensureAdmin('/ban @' + query)) return;
-    if (!query){ showToast('Usage: /ban @playername'); return; }
-    const m = findPlayers(query);
-    if (!m.length){ showToast('No player "' + query.slice(0,16) + '" in this room'); return; }
-    if (m.length > 1){ showToast('Several match \u2014 use the full name, e.g. ' + nameLabel(m[0].peer, state.currentSector)); return; }
-    const target = m[0], label = nameLabel(target.peer, state.currentSector);
-    if (target.isMe){ showToast("You can't ban yourself."); return; }
-    state.room.send({ type:'adminBan', target: target.peer });
-    showToast('BANNED ' + label);
+    const username = query.replace(/^@/, '').trim();
+    if (!username){ showToast('Usage: /ban @username'); return; }
+    state.room.send({ type:'adminBan', target: username });
+  }
+  function handleAdminBanResult(msg){
+    if (msg.ok) showToast('BANNED ' + msg.username);
+    else showToast(msg.error || 'Could not ban that account.');
   }
   // The server closes our socket and stops us reconnecting; just show it.
   function handleBanned(){
@@ -3682,19 +3685,21 @@
       info.className = 'ban-info';
       const mins = Math.max(0, Math.round((Date.now() - b.bannedAt) / 60000));
       const when = mins < 1 ? 'just now' : (mins < 60 ? mins + 'm ago' : Math.round(mins/60) + 'h ago');
-      info.textContent = (b.name || 'OPERATOR') + ' \u2014 banned ' + when;
+      const label = b.kind === 'account' ? (b.username || 'ACCOUNT') + ' (account)' : (b.name || 'OPERATOR');
+      info.textContent = label + ' \u2014 banned ' + when;
       row.appendChild(info);
       const btn = document.createElement('button');
       btn.type = 'button'; btn.className = 'ban-unban-btn'; btn.textContent = 'UNBAN';
-      btn.addEventListener('click', ()=>openUnbanPrompt(b.ip, b.name));
+      btn.addEventListener('click', ()=>openUnbanPrompt(b));
       row.appendChild(btn);
       box.appendChild(row);
     });
   }
-  let pendingUnbanIp = null;
-  function openUnbanPrompt(ip, name){
-    pendingUnbanIp = ip;
-    byId('unbanPassTarget').textContent = 'PASSWORD TO UNBAN ' + (name || 'PLAYER').toUpperCase();
+  let pendingUnban = null; // { kind: 'ip'|'account', ip?, username?, name? }
+  function openUnbanPrompt(b){
+    pendingUnban = b;
+    const label = b.kind === 'account' ? b.username : b.name;
+    byId('unbanPassTarget').textContent = 'PASSWORD TO UNBAN ' + (label || 'PLAYER').toUpperCase();
     byId('unbanPassErr').textContent = '';
     byId('unbanPassInput').value = '';
     byId('unbanPassBackdrop').classList.add('show');
@@ -3703,12 +3708,15 @@
   function closeUnbanPrompt(){
     byId('unbanPassBackdrop').classList.remove('show');
     byId('unbanPassInput').blur();
-    pendingUnbanIp = null;
+    pendingUnban = null;
   }
   function submitUnban(){
     const pw = byId('unbanPassInput').value;
-    if (!pw || !pendingUnbanIp) return;
-    state.room.send({ type:'adminUnban', ip: pendingUnbanIp, password: pw });
+    if (!pw || !pendingUnban) return;
+    const payload = { type:'adminUnban', password: pw };
+    if (pendingUnban.kind === 'account') payload.username = pendingUnban.username;
+    else payload.ip = pendingUnban.ip;
+    state.room.send(payload);
   }
   function handleUnbanResult(msg){
     if (msg.ok){

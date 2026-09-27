@@ -83,10 +83,21 @@ const isAdminCreds = (username, password) =>
 // Map so we can show admins who they banned and when -- keyed by IP since
 // that's the actual thing being blocked.
 const bannedIPs = new Map(); // ip -> { name, bannedAt }
+// /ban @username (admin-only) bans an ACCOUNT by username -- in-memory,
+// resets on a server restart, same tradeoff as bannedIPs above. This is
+// what makes bans work even when the target isn't currently connected /
+// isn't even in a room: it's keyed on the account, not a live peer or
+// socket, so an admin can ban anyone who has ever registered, any time.
+// Any currently-connected session for that account also gets kicked and,
+// as a belt-and-suspenders measure, that connection's IP is banned too
+// (mainly useful for guests, who have no account to key a ban off of).
+const bannedUsernames = new Map(); // usernameLower -> { username, bannedAt }
 function banListPayload() {
-  return Array.from(bannedIPs.entries())
-    .map(([ip, info]) => ({ ip, name: info.name, bannedAt: info.bannedAt }))
-    .sort((a, b) => b.bannedAt - a.bannedAt);
+  const ipBans = Array.from(bannedIPs.entries())
+    .map(([ip, info]) => ({ kind: 'ip', ip, name: info.name, bannedAt: info.bannedAt }));
+  const acctBans = Array.from(bannedUsernames.entries())
+    .map(([, info]) => ({ kind: 'account', username: info.username, bannedAt: info.bannedAt }));
+  return ipBans.concat(acctBans).sort((a, b) => b.bannedAt - a.bannedAt);
 }
 
 // ---- accounts (persistent cross-room kill totals, admin-manageable) ----
@@ -327,21 +338,42 @@ wss.on('connection', (ws, req) => {
       t.presence.adminTank = tank;
       broadcastPeers();
     } else if (msg.type === 'adminBan') {
-      // admin-only; target must be in the same room as the admin. Bans by
-      // IP (in-memory, resets on restart) since peer ids are per-connection
-      // and wouldn't survive a reload -- fine for a casual friends server.
+      // admin-only; bans an ACCOUNT by username (not a peer id), so this
+      // works no matter whether the target is online, offline, or not
+      // even in a room right now -- same idea as adminDelete below. If a
+      // session for that account (or a guest going by that display name,
+      // who has no account to key off of) happens to be connected right
+      // now, we also kick it immediately and IP-ban that connection.
       if (!p.admin || typeof msg.target !== 'string') return;
-      const t = peers.get(msg.target);
-      if (!t || !p.presence.roomId || t.presence.roomId !== p.presence.roomId) return;
-      if (t.ip) bannedIPs.set(t.ip, { name: t.presence.name || 'OPERATOR', bannedAt: Date.now() });
-      console.log('Banned', t.presence.name || msg.target, t.ip || '(no ip)');
-      if (t.ws.readyState === WebSocket.OPEN) {
-        t.ws.send(JSON.stringify({ type: 'banned' }));
-        t.ws.close(4403, 'banned');
+      const key = msg.target.trim().toLowerCase();
+      if (!key) {
+        ws.send(JSON.stringify({ type: 'adminBanResult', ok: false, error: 'Usage: /ban @username' }));
+        return;
       }
-      peers.delete(msg.target);
-      broadcastPeers();
-      evaluateMatch();
+      if (p.account && key === p.account) {
+        ws.send(JSON.stringify({ type: 'adminBanResult', ok: false, error: "You can't ban yourself." }));
+        return;
+      }
+      const acct = accounts.get(key);
+      const displayName = acct ? acct.username : msg.target.trim().slice(0, 16);
+      bannedUsernames.set(key, { username: displayName, bannedAt: Date.now() });
+      dropSessionsFor(key);
+      let kicked = 0;
+      for (const [pid, pp] of peers) {
+        const isMatch = pp.account === key ||
+          (!pp.account && (pp.presence.name || '').trim().toLowerCase() === key);
+        if (!isMatch) continue;
+        if (pp.ip) bannedIPs.set(pp.ip, { name: pp.presence.name || displayName, bannedAt: Date.now() });
+        if (pp.ws.readyState === WebSocket.OPEN) {
+          pp.ws.send(JSON.stringify({ type: 'banned' }));
+          pp.ws.close(4403, 'banned');
+        }
+        peers.delete(pid);
+        kicked++;
+      }
+      console.log('Banned account', displayName, kicked ? '(kicked ' + kicked + ' active session(s))' : '(offline)');
+      ws.send(JSON.stringify({ type: 'adminBanResult', ok: true, username: displayName, bans: banListPayload() }));
+      if (kicked) { broadcastPeers(); evaluateMatch(); }
     } else if (msg.type === 'adminListBans') {
       if (!p.admin) return;
       ws.send(JSON.stringify({ type: 'adminBanList', bans: banListPayload() }));
@@ -363,7 +395,10 @@ wss.on('connection', (ws, req) => {
         return;
       }
       p.unbanFails = 0;
-      bannedIPs.delete(msg.ip);
+      // Ban entries come back tagged by kind (see banListPayload) -- an IP
+      // entry unbans by msg.ip, an account entry by msg.username.
+      if (typeof msg.ip === 'string') bannedIPs.delete(msg.ip);
+      if (typeof msg.username === 'string') bannedUsernames.delete(msg.username.trim().toLowerCase());
       ws.send(JSON.stringify({ type: 'adminUnbanResult', ok: true, bans: banListPayload() }));
     } else if (msg.type === 'adminLogout') {
       p.admin = false;
@@ -389,6 +424,10 @@ wss.on('connection', (ws, req) => {
       }
       if (!USERNAME_RE.test(username)) {
         ws.send(JSON.stringify({ type: 'authResult', ok: false, error: 'Username must be 3-16 letters, numbers or _.' }));
+        return;
+      }
+      if (bannedUsernames.has(username.toLowerCase())) {
+        ws.send(JSON.stringify({ type: 'authResult', ok: false, error: 'This username is banned.' }));
         return;
       }
       if (password.length < 4) {
@@ -423,6 +462,10 @@ wss.on('connection', (ws, req) => {
         return;
       }
       const key = username.toLowerCase();
+      if (bannedUsernames.has(key)) {
+        ws.send(JSON.stringify({ type: 'authResult', ok: false, error: 'This account is banned.' }));
+        return;
+      }
       const acct = accounts.get(key);
       if (!acct || hashPassword(password, acct.salt) !== acct.hash) {
         ws.send(JSON.stringify({ type: 'authResult', ok: false, error: 'Wrong username or password.' }));
@@ -435,7 +478,8 @@ wss.on('connection', (ws, req) => {
       // silent re-auth on connect/reconnect from a saved "remember me" token
       const key = typeof msg.token === 'string' ? sessions.get(msg.token) : null;
       const acct = key ? accounts.get(key) : null;
-      if (!acct) {
+      if (!acct || bannedUsernames.has(key)) {
+        if (key && bannedUsernames.has(key)) dropSessionsFor(key);
         ws.send(JSON.stringify({ type: 'authResult', ok: false, silent: true }));
         return;
       }
