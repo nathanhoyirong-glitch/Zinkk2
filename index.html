@@ -239,14 +239,6 @@
   .loadout-tile img { width:46px; height:auto; pointer-events:none; }
 
   /* ---------- diep.io-style stat allocation panel ---------- */
-  .stats-toggle-btn { position:relative; }
-  .stats-toggle-btn .stats-badge {
-    position:absolute; top:-5px; right:-5px; min-width:15px; height:15px; padding:0 3px;
-    border-radius:8px; background:var(--green); color:var(--on-accent); font-size:9px;
-    font-weight:700; line-height:15px; text-align:center; display:none;
-  }
-  .stats-toggle-btn .stats-badge.show { display:block; }
-
   .stats-panel {
     position:absolute; left:10px; bottom:max(156px, calc(148px + env(safe-area-inset-bottom)));
     width:min(268px, calc(100% - 20px)); z-index:9; pointer-events:none;
@@ -264,9 +256,10 @@
     position:relative; display:flex; align-items:center; height:22px; max-height:22px; width:100%;
     background:rgba(35,40,43,0.5); border-radius:11px; border:none; padding:0; overflow:hidden;
     font-family:var(--mono); cursor:default; box-shadow:0 2px 4px rgba(0,0,0,0.3);
-    margin-bottom:5px; opacity:1;
+    margin-bottom:5px; opacity:1; outline:none; -webkit-tap-highlight-color:transparent;
     transition: max-height .15s ease, opacity .15s ease, margin-bottom .15s ease;
   }
+  .stat-row:focus, .stat-row:focus-visible { outline:none; box-shadow:0 2px 4px rgba(0,0,0,0.3); }
   .stat-row.disabled { max-height:0; opacity:0; margin-bottom:0; pointer-events:none; }
   .stat-fill {
     position:absolute; top:0; left:0; bottom:0; width:0%; background:var(--stat-color, #6ee39a);
@@ -279,19 +272,10 @@
       transparent 1px, transparent calc(100% / 7));
   }
   .stat-label {
-    position:relative; flex:1 1 auto; padding-left:14px; font-size:10.5px; font-weight:700;
+    position:relative; flex:1 1 auto; padding-left:14px; padding-right:14px; font-size:10.5px; font-weight:700;
     color:#f2f4f2; letter-spacing:0.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
   .stat-label .stat-key { color:#9aa3a0; font-weight:600; margin-left:5px; font-size:10px; }
-  .stat-plus {
-    position:relative; flex:0 0 auto; width:20px; height:20px; margin:1px; border-radius:5px;
-    background:var(--stat-color, #6ee39a); border:none; color:#0000004d; font-family:var(--mono);
-    font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center;
-    cursor:pointer; box-shadow: inset 0 -2px 0 rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.3);
-    transition: transform .08s;
-  }
-  .stat-plus:active { transform:scale(0.9); }
-  .stat-row.maxed .stat-plus { opacity:0.25; }
   .stat-row.maxed .stat-label { color:#8f9a95; }
 
   /* twin virtual joysticks -- left drives movement, right aims the
@@ -562,7 +546,6 @@
           <button class="hud-leave-btn" id="gameSettingsBtn" aria-label="Settings">&#9881;</button>
           <button class="hud-leave-btn" id="cmdBtn" aria-label="Commands">/</button>
           <button class="hud-leave-btn" id="chatBtn" aria-label="Chat">&#128172;<span class="chat-dot"></span></button>
-          <button class="hud-leave-btn stats-toggle-btn" id="statsToggleBtn" aria-label="Upgrade stats">&#9650;<span class="stats-badge" id="statsBadge">0</span></button>
           <b id="hudRoomName">SECTOR</b><span id="hudSelfHealth">HP 100</span>
           <span class="match-timer" id="matchTimer"></span>
           <span class="match-timer" id="droneCount"></span>
@@ -590,42 +573,34 @@
         <button type="button" class="stat-row" data-stat="regen" style="--stat-color:#e8a15a">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">HEALTH REGEN <span class="stat-key">[1]</span></span>
-          <span class="stat-plus">+</span>
         </button>
         <button type="button" class="stat-row" data-stat="maxhp" style="--stat-color:#d85ee0">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">MAX HEALTH <span class="stat-key">[2]</span></span>
-          <span class="stat-plus">+</span>
         </button>
         <button type="button" class="stat-row" data-stat="bodydmg" style="--stat-color:#9b6fe3">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">BODY DAMAGE <span class="stat-key">[3]</span></span>
-          <span class="stat-plus">+</span>
         </button>
         <button type="button" class="stat-row" data-stat="bulletspeed" style="--stat-color:#5f96e8">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">BULLET SPEED <span class="stat-key">[4]</span></span>
-          <span class="stat-plus">+</span>
         </button>
         <button type="button" class="stat-row" data-stat="penetration" style="--stat-color:#e3cf4f">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">BULLET PENETRATION <span class="stat-key">[5]</span></span>
-          <span class="stat-plus">+</span>
         </button>
         <button type="button" class="stat-row" data-stat="bulletdmg" style="--stat-color:#e35e6e">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">BULLET DAMAGE <span class="stat-key">[6]</span></span>
-          <span class="stat-plus">+</span>
         </button>
         <button type="button" class="stat-row" data-stat="reload" style="--stat-color:#7fd44f">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">RELOAD <span class="stat-key">[7]</span></span>
-          <span class="stat-plus">+</span>
         </button>
         <button type="button" class="stat-row" data-stat="movespeed" style="--stat-color:#4fd4d0">
           <span class="stat-fill" data-fill></span>
           <span class="stat-label">MOVEMENT SPEED <span class="stat-key">[8]</span></span>
-          <span class="stat-plus">+</span>
         </button>
       </div>
 
@@ -1231,10 +1206,16 @@
   function allocateStat(id){
     const lvl = state.upgrades.lvl;
     if (!(id in lvl)) return;
-    if (state.upgrades.points <= 0){ showToast('No upgrade points left'); return; }
     if (lvl[id] >= STAT_MAX){ showToast('Already maxed'); return; }
-    lvl[id] += 1;
-    state.upgrades.points -= 1;
+    if (state.adminUnlocked){
+      // admins spend no points -- one tap sends this stat straight to max
+      lvl[id] = STAT_MAX;
+      showToast('ADMIN: ' + id.toUpperCase() + ' MAXED (FREE)');
+    } else {
+      if (state.upgrades.points <= 0){ showToast('No upgrade points left'); return; }
+      lvl[id] += 1;
+      state.upgrades.points -= 1;
+    }
     if (id === 'maxhp' && state.alive){
       state.hp = Math.min(effectiveMaxHp(), state.hp + 15);
       if (state.room) state.room.presence({ hp: state.hp, maxHp: effectiveMaxHp() });
@@ -1246,28 +1227,23 @@
   function renderStatsPanel(){
     const u = state.upgrades;
     const pts = u.points;
+    const free = !!state.adminUnlocked; // admins can always open the panel and spend nothing
     byId('statsPointsTag').textContent = '\u00d7' + pts;
     byId('statsPointsTag').classList.toggle('hide', pts <= 0);
-    const badge = byId('statsBadge');
-    badge.textContent = pts;
-    badge.classList.toggle('show', pts > 0);
     const panelEl = byId('statsPanel');
+    panelEl.classList.toggle('show', pts > 0 || free);
     STATS.forEach(s=>{
       const row = panelEl.querySelector('[data-stat="' + s.id + '"]');
       if (!row) return;
       const level = u.lvl[s.id];
       row.querySelector('[data-fill]').style.width = Math.round((level / STAT_MAX) * 100) + '%';
-      row.classList.toggle('disabled', pts <= 0);
+      row.classList.toggle('disabled', pts <= 0 && !free);
       row.classList.toggle('maxed', level >= STAT_MAX);
     });
   }
 
   function setupStatsPanel(){
-    const panelEl = byId('statsPanel');
-    byId('statsToggleBtn').addEventListener('click', ()=>{
-      panelEl.classList.toggle('show');
-    });
-    panelEl.addEventListener('click', (e)=>{
+    byId('statsPanel').addEventListener('click', (e)=>{
       const row = e.target.closest('.stat-row');
       if (!row) return;
       allocateStat(row.dataset.stat);
@@ -3557,12 +3533,14 @@
       state.adminUnlocked = true; state.adminToken = msg.token || null;
       if (!loginViaToken && byId('adminRememberChk').checked) saveToken(msg.token);
       updateCmdBtnVisibility();
+      renderStatsPanel();
       closeLogin();
       if (pendingAdminOpen && state.currentSector){ const t = pendingCmdText; pendingCmdText = '/admin'; runCommand(t); }
       pendingAdminOpen = false; loginViaToken = false;
     } else {
       state.adminUnlocked = false; state.adminToken = null;
       updateCmdBtnVisibility();
+      renderStatsPanel();
       if (loginViaToken){ saveToken(null); openLogin('Saved login expired \u2014 enter the password again.'); }
       else byId('adminLoginErr').textContent = msg.error || 'Wrong password.';
       pendingAdminOpen = false; loginViaToken = false;
@@ -3572,6 +3550,7 @@
     state.adminUnlocked = false; state.adminToken = null; state.adminTank = null;
     saveToken(null); closeAdmin();
     updateCmdBtnVisibility();
+    renderStatsPanel();
     if (state.room) state.room.send({ type:'adminLogout' });
     showToast('Admin logged out');
   }
@@ -3763,6 +3742,7 @@
         state.adminToken = msg.adminToken;
         if (authSubmitting && authRememberPending) saveToken(msg.adminToken);
         updateCmdBtnVisibility();
+        renderStatsPanel();
       }
       updateAccountUI();
       if (authSubmitting){ closeAuth(); showToast('Signed in as ' + msg.username + (msg.isAdmin ? ' (admin)' : '')); enterLobby(); }
@@ -3781,6 +3761,7 @@
       state.adminUnlocked = false; state.adminToken = null; state.adminTank = null;
       saveToken(null);
       updateCmdBtnVisibility();
+      renderStatsPanel();
     }
     updateAccountUI();
     if (state.room) state.room.send({ type: 'logoutAccount' });
