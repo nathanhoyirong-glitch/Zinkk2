@@ -867,10 +867,9 @@
   const SPRITE_DESTROYER_CX = 110, SPRITE_DESTROYER_CY = 110;
   const SPRITE_DESTROYER_RADIUS = 38;
   const SPRITE_DESTROYER_ROTATE_OFFSET = 0;
-  const DESTROYER_BARREL_TILT = 0.62;   // radians, the block's own rotation for the chunky/tilted look
-  const DESTROYER_BARREL_SIDE = 58;     // the block is a big rotated square
-  const DESTROYER_BARREL_DIST = 66;     // how far forward its near edge sits, from hull center
-  const DESTROYER_BARREL_NEAR = DESTROYER_BARREL_DIST - DESTROYER_BARREL_SIDE * 0.35; // near-edge offset used when drawing the block
+  const DESTROYER_BARREL_TILT = 0.27;   // radians, the block's own rotation for the chunky/tilted look
+  const DESTROYER_BARREL_SIDE = 60;     // the block is a big rotated square
+  const DESTROYER_BARREL_NEAR = 15;     // near-edge offset used when drawing the block -- sits deep inside the hull radius (38) so it reads as bolted on, not just resting beside it
   const DESTROYER_BARREL_TIP_DIST = DESTROYER_BARREL_NEAR + DESTROYER_BARREL_SIDE;    // true muzzle distance (the block's far edge)
   const DESTROYER_BULLET_RADIUS = 27;   // native-space bullet radius -- matches half the barrel's side
   // The block is drawn rotated by DESTROYER_BARREL_TILT, so its actual
@@ -889,9 +888,9 @@
     g.save();
     g.translate(SPRITE_DESTROYER_CX, SPRITE_DESTROYER_CY);
     g.rotate(DESTROYER_BARREL_TILT);
-    g.fillStyle = '#8a8a92'; // low-saturation gray -- recolorSprite() leaves this alone
+    g.fillStyle = '#999999'; // low-saturation gray -- recolorSprite() leaves this alone
     g.fillRect(DESTROYER_BARREL_NEAR, -DESTROYER_BARREL_SIDE/2, DESTROYER_BARREL_SIDE, DESTROYER_BARREL_SIDE);
-    g.strokeStyle = '#3a3a42'; g.lineWidth = 3;
+    g.strokeStyle = '#4d4d4d'; g.lineWidth = 3;
     g.strokeRect(DESTROYER_BARREL_NEAR, -DESTROYER_BARREL_SIDE/2, DESTROYER_BARREL_SIDE, DESTROYER_BARREL_SIDE);
     g.restore();
     g.fillStyle = '#6ee39a'; // saturated -- recolorSprite() retunes this to each player's hue
@@ -2306,7 +2305,7 @@
     // either forward or backward (whichever end of that barrel it's from)
     // rather than along the barrel's own diagonal angle.
     function shotAngleFor(barrel, tipAngle){
-      if (loadoutId === 'triple' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo') return tipAngle;
+      if (loadoutId === 'triple' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo' || loadoutId === 'destroyer') return tipAngle;
       if (loadoutId === 'parallel' || loadoutId === 'necro'){
         let diff = tipAngle - state.turretAngle;
         while (diff > Math.PI) diff -= Math.PI*2;
