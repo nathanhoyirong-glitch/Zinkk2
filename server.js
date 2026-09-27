@@ -338,12 +338,14 @@ wss.on('connection', (ws, req) => {
       t.presence.adminTank = tank;
       broadcastPeers();
     } else if (msg.type === 'adminBan') {
-      // admin-only; bans an ACCOUNT by username (not a peer id), so this
-      // works no matter whether the target is online, offline, or not
-      // even in a room right now -- same idea as adminDelete below. If a
-      // session for that account (or a guest going by that display name,
-      // who has no account to key off of) happens to be connected right
-      // now, we also kick it immediately and IP-ban that connection.
+      // admin-only; looks the target up by username across EVERY current
+      // connection -- lobby included, not just the admin's own room --
+      // rather than by peer id, so it isn't limited to one room.
+      //   - Online right now (lobby or any room): ban their IP address
+      //     and disconnect them immediately. This is the normal case.
+      //   - Not currently connected: there's no live IP to ban, so fall
+      //     back to banning the ACCOUNT by username, which blocks them
+      //     from logging back in later. Same idea as adminDelete below.
       if (!p.admin || typeof msg.target !== 'string') return;
       const key = msg.target.trim().toLowerCase();
       if (!key) {
@@ -354,26 +356,38 @@ wss.on('connection', (ws, req) => {
         ws.send(JSON.stringify({ type: 'adminBanResult', ok: false, error: "You can't ban yourself." }));
         return;
       }
-      const acct = accounts.get(key);
-      const displayName = acct ? acct.username : msg.target.trim().slice(0, 16);
-      bannedUsernames.set(key, { username: displayName, bannedAt: Date.now() });
-      dropSessionsFor(key);
-      let kicked = 0;
+
+      let targetId = null, target = null;
       for (const [pid, pp] of peers) {
-        const isMatch = pp.account === key ||
-          (!pp.account && (pp.presence.name || '').trim().toLowerCase() === key);
-        if (!isMatch) continue;
-        if (pp.ip) bannedIPs.set(pp.ip, { name: pp.presence.name || displayName, bannedAt: Date.now() });
-        if (pp.ws.readyState === WebSocket.OPEN) {
-          pp.ws.send(JSON.stringify({ type: 'banned' }));
-          pp.ws.close(4403, 'banned');
-        }
-        peers.delete(pid);
-        kicked++;
+        const isMatch = pp.account === key || (pp.presence.name || '').trim().toLowerCase() === key;
+        if (isMatch) { targetId = pid; target = pp; break; }
       }
-      console.log('Banned account', displayName, kicked ? '(kicked ' + kicked + ' active session(s))' : '(offline)');
-      ws.send(JSON.stringify({ type: 'adminBanResult', ok: true, username: displayName, bans: banListPayload() }));
-      if (kicked) { broadcastPeers(); evaluateMatch(); }
+
+      if (target) {
+        const displayName = target.presence.name || (target.account && accounts.get(target.account) && accounts.get(target.account).username) || msg.target.trim().slice(0, 16);
+        if (target.ip) bannedIPs.set(target.ip, { name: displayName, bannedAt: Date.now() });
+        if (target.account) { bannedUsernames.set(target.account, { username: accounts.get(target.account) ? accounts.get(target.account).username : displayName, bannedAt: Date.now() }); dropSessionsFor(target.account); }
+        if (target.ws.readyState === WebSocket.OPEN) {
+          target.ws.send(JSON.stringify({ type: 'banned' }));
+          target.ws.close(4403, 'banned');
+        }
+        peers.delete(targetId);
+        console.log('Banned', displayName, target.ip || '(no ip)');
+        ws.send(JSON.stringify({ type: 'adminBanResult', ok: true, username: displayName, bans: banListPayload() }));
+        broadcastPeers();
+        evaluateMatch();
+        return;
+      }
+
+      const acct = accounts.get(key);
+      if (!acct) {
+        ws.send(JSON.stringify({ type: 'adminBanResult', ok: false, error: 'No player or account "' + msg.target.trim().slice(0, 16) + '" found.' }));
+        return;
+      }
+      bannedUsernames.set(key, { username: acct.username, bannedAt: Date.now() });
+      dropSessionsFor(key);
+      console.log('Banned account', acct.username, '(offline)');
+      ws.send(JSON.stringify({ type: 'adminBanResult', ok: true, username: acct.username, bans: banListPayload() }));
     } else if (msg.type === 'adminListBans') {
       if (!p.admin) return;
       ws.send(JSON.stringify({ type: 'adminBanList', bans: banListPayload() }));

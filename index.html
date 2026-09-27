@@ -370,7 +370,7 @@
   .map-card .md { font-size:10px; line-height:1.3; }
 
   /* ---------- command bar + admin panel ---------- */
-  .cmdbar { position:absolute; top:56px; left:50%; transform:translateX(-50%); z-index:9; display:none; width:min(320px, calc(100% - 28px)); }
+  .cmdbar { position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:65; display:none; width:min(320px, calc(100% - 28px)); }
   .cmdbar.show { display:block; }
   .cmdbar input { background:rgba(var(--panel-rgb),0.92); }
 
@@ -496,6 +496,7 @@
         <button class="btn-ghost" id="leaderboardBtn">&#127942; LEADERBOARD</button>
         <button class="btn-host" id="hostBtn">+ HOST</button>
         <button class="btn-ghost" id="lobbySettingsBtn">&#9881; SETTINGS</button>
+        <button class="btn-ghost" id="lobbyCmdBtn" aria-label="Commands">/ COMMANDS</button>
         <div class="callsign-chip"><span class="dot" id="lobbyLinkDot"></span><span id="lobbyLinkText">LINKING&hellip;</span></div>
       </div>
     </div>
@@ -553,8 +554,6 @@
         </div>
         <div class="score-strip" id="scoreStrip"></div>
       </div>
-
-      <div class="cmdbar" id="cmdBar"><input type="text" id="cmdInput" maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="type a command, e.g. /admin" /></div>
 
       <div class="chatbar" id="chatBar">
         <div class="chat-header" id="chatHeader"><span>CHAT</span><span class="chat-drag-dots">&#8942;&#8942;</span></div>
@@ -625,6 +624,8 @@
   </section>
 
 </div>
+
+<div class="cmdbar" id="cmdBar"><input type="text" id="cmdInput" maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="type a command, e.g. /admin" /></div>
 
 <div class="toast" id="toast"></div>
 
@@ -3443,7 +3444,7 @@
     ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'],
   ];
   function openCmd(prefill){
-    if (!state.currentSector) return;
+    if (!state.room) return;
     closeChat();
     state.keys = {}; state.moveVec = {x:0,y:0,mag:0};
     const inp = byId('cmdInput');
@@ -3467,6 +3468,9 @@
     else showToast('Unknown command: ' + text.trim().slice(0,20));
   }
   byId('cmdBtn').addEventListener('click', ()=>{
+    if (byId('cmdBar').classList.contains('show')) closeCmd(); else openCmd('/');
+  });
+  byId('lobbyCmdBtn').addEventListener('click', ()=>{
     if (byId('cmdBar').classList.contains('show')) closeCmd(); else openCmd('/');
   });
   byId('cmdInput').addEventListener('keydown', (e)=>{
@@ -3639,11 +3643,14 @@
   }
 
   // ---- /ban @username (admin only; enforced again by the server) ----
-  // Bans the ACCOUNT by username, not a peer in the current room -- this
-  // works even if the target is offline, or online but somewhere else on
-  // the server entirely. See handleAdminBanResult for the reply.
+  // Works from the lobby or any room, not just the admin's own room --
+  // the server looks the name up across every connection. If the target
+  // is currently online (lobby or any room) they're banned by IP address
+  // and kicked immediately; if they're offline, their account is banned
+  // instead so they can't log back in. See handleAdminBanResult for the
+  // reply either way.
   function adminBan(query){
-    if (!state.currentSector) return;
+    if (!state.room) return;
     if (!ensureAdmin('/ban @' + query)) return;
     const username = query.replace(/^@/, '').trim();
     if (!username){ showToast('Usage: /ban @username'); return; }
@@ -3662,7 +3669,7 @@
   // ---- /banned: view + unban (unban is password-gated every time, even
   // on a device that's already unlocked -- see the server-side comment) ----
   function requestBanList(){
-    if (!state.currentSector) return;
+    if (!state.room) return;
     if (ensureAdmin('/banned')) state.room.send({ type:'adminListBans' });
   }
   function showBanPanel(bans){
@@ -3881,7 +3888,7 @@
   // ---- /delete @username (admin only; deletes the ACCOUNT, not just a
   // player -- enforced again server-side regardless of what this sends) ----
   function adminDeleteAccount(query){
-    if (!state.currentSector) return;
+    if (!state.room) return;
     if (!ensureAdmin('/delete @' + query)) return;
     const username = query.replace(/^@/, '').trim();
     if (!username){ showToast('Usage: /delete @username'); return; }
