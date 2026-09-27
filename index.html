@@ -2306,7 +2306,7 @@
     // either forward or backward (whichever end of that barrel it's from)
     // rather than along the barrel's own diagonal angle.
     function shotAngleFor(barrel, tipAngle){
-      if (loadoutId === 'triple' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo') return tipAngle;
+      if (loadoutId === 'triple' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo' || loadoutId === 'destroyer') return tipAngle;
       if (loadoutId === 'parallel' || loadoutId === 'necro'){
         let diff = tipAngle - state.turretAngle;
         while (diff > Math.PI) diff -= Math.PI*2;
