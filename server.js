@@ -134,12 +134,15 @@ function broadcastLeaderboard() {
   sendAll({ type: 'leaderboard', top: leaderboardPayload() });
 }
 
-const KNOWN_TANKS = new Set(['single', 'dual', 'triple', 'parallel', 'omni', 'triplet', 'quad', 'necro', 'octo', 'destroyer']);
+const TIER1_TANKS = new Set(['twin', 'machinegun', 'sniper']);
+const KNOWN_TANKS = new Set(['single', 'dual', 'twin', 'machinegun', 'sniper', 'gunner', 'triple', 'parallel', 'omni', 'triplet', 'quad', 'necro', 'octo', 'destroyer']);
 function sanitizePresence(d) {
   // 'admin' is server-controlled only (drives the rainbow name for other
   // clients) -- never let a client hand it to us via a presence patch.
   if ('admin' in d) delete d.admin;
   if ('adminTank' in d && d.adminTank !== null && !KNOWN_TANKS.has(d.adminTank)) delete d.adminTank;
+  // first-kill tank pick -- only the three known ids (or null) may be broadcast
+  if ('loadout1' in d && d.loadout1 !== null && !TIER1_TANKS.has(d.loadout1)) delete d.loadout1;
   if ('roomId' in d && d.roomId !== null && !(typeof d.roomId === 'string' && ROOM_ID_RE.test(d.roomId))) delete d.roomId;
   if ('roomMeta' in d && d.roomMeta !== null) {
     const m = d.roomMeta;
