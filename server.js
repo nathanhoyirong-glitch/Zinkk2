@@ -135,7 +135,7 @@ function broadcastLeaderboard() {
 }
 
 const TIER1_TANKS = new Set(['twin', 'machinegun', 'sniper']);
-const KNOWN_TANKS = new Set(['single', 'dual', 'twin', 'machinegun', 'sniper', 'gunner', 'triple', 'parallel', 'omni', 'triplet', 'quad', 'necro', 'octo', 'destroyer', 'overseer', 'hunter', 'predator']);
+const KNOWN_TANKS = new Set(['single', 'dual', 'twin', 'machinegun', 'sniper', 'gunner', 'triple', 'parallel', 'omni', 'triplet', 'quad', 'necro', 'octo', 'destroyer', 'overseer', 'hunter', 'predator', 'quintet', 'quadtwin', 'overlord']);
 function sanitizePresence(d) {
   // 'admin' is server-controlled only (drives the rainbow name for other
   // clients) -- never let a client hand it to us via a presence patch.

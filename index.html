@@ -993,6 +993,59 @@
     return c.toDataURL();
   }
   const SPRITE_SRC_PREDATOR = buildPredatorSprite();
+  // Overlord -- the 20-kill upgrade for players who chose Overseer at 7 kills.
+  // Five drone launchers around the hull (angles measured from the design
+  // image); it cycles through them and can keep more drones out at once.
+  const OVLD_C = 75, OVLD_TIP = 61, OVLD_W = 33;
+  const OVLD_ANGLES = [-132, -44, 34, 105, 166].map(d=>d * Math.PI / 180);
+  function buildOverlordSprite(){
+    const c = document.createElement('canvas');
+    c.width = OVLD_C*2; c.height = OVLD_C*2;
+    const g = c.getContext('2d');
+    g.translate(OVLD_C, OVLD_C);
+    g.fillStyle = '#999999'; g.strokeStyle = '#4d4d4d'; g.lineWidth = 3; g.lineJoin = 'miter';
+    OVLD_ANGLES.forEach(a=>{
+      g.save(); g.rotate(a);
+      g.fillRect(10, -OVLD_W/2, OVLD_TIP - 10, OVLD_W);
+      g.strokeRect(10, -OVLD_W/2, OVLD_TIP - 10, OVLD_W);
+      g.restore();
+    });
+    g.fillStyle = '#6ee39a';
+    g.beginPath(); g.arc(0, 0, T1_R, 0, Math.PI*2); g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#3a3a42'; g.stroke();
+    return c.toDataURL();
+  }
+  const SPRITE_SRC_OVERLORD = buildOverlordSprite();
+  // Quad Twin -- a 20-kill upgrade on the Twin route (Triple / Quad -> Triplet or
+  // Quad Twin). Four twin pairs (front, back, left, right); fires bullets out
+  // of all eight barrels, each pair shooting in its own direction.
+  const QT_C = 82, QT_TIP = 74, QT_BW = 34, QT_OFF = QT_BW/2 + 0.5;
+  const QT_ANGLES = [0, Math.PI/2, Math.PI, Math.PI*1.5];
+  const QT_BARRELS = [];
+  QT_ANGLES.forEach(A=>{ [-1, 1].forEach(sd=>{
+    const off = sd * QT_OFF;
+    QT_BARRELS.push({ angle: A + Math.atan2(off, QT_TIP), dist: Math.hypot(QT_TIP, off), aim: A });
+  }); });
+  function buildQuadTwinSprite(){
+    const c = document.createElement('canvas');
+    c.width = QT_C*2; c.height = QT_C*2;
+    const g = c.getContext('2d');
+    g.translate(QT_C, QT_C);
+    g.fillStyle = '#999999'; g.strokeStyle = '#4d4d4d'; g.lineWidth = 3; g.lineJoin = 'miter';
+    QT_ANGLES.forEach(A=>{
+      g.save(); g.rotate(A);
+      [-1, 1].forEach(sd=>{
+        g.fillRect(10, sd*QT_OFF - QT_BW/2, QT_TIP - 10, QT_BW);
+        g.strokeRect(10, sd*QT_OFF - QT_BW/2, QT_TIP - 10, QT_BW);
+      });
+      g.restore();
+    });
+    g.fillStyle = '#6ee39a';
+    g.beginPath(); g.arc(0, 0, T1_R, 0, Math.PI*2); g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#3a3a42'; g.stroke();
+    return c.toDataURL();
+  }
+  const SPRITE_SRC_QUADTWIN = buildQuadTwinSprite();
   // Overseer -- the other Sniper 7-kill upgrade. Two trapezoid drone
   // launchers on the sides (wider at the muzzle); launches drones (see fireDrone).
   const OVSR_C = 70, OVSR_TIP = 64, OVSR_BASE_W = 26, OVSR_TIP_W = 42;
@@ -1139,6 +1192,9 @@
     sniper:    { srcKey:'sniper',    w:T1_CX+SNIPER_TIP+6,  h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:SNIPER_TIP }], fireMul:1.5, dmgMul:1.6, speedMul:1.7 },
     hunter:    { srcKey:'hunter',    w:T1_CX+HUNTER_TIP+6, h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:HUNTER_TIP }], fireMul:3, dmgMul:0.6, speedMul:1.4, bulletRadius:HUNTER_BODY_W/2, burst:{ count:5, gap:70, min:0.3 } },  // 5-shot burst, bullets grow from 30% to the big (hull-side) barrel's size
     predator:  { srcKey:'predator',  w:T1_CX+PRED_TIP+6, h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:PRED_TIP }], fireMul:4, dmgMul:0.5, speedMul:1.5, bulletRadius:PRED_W/2, burst:{ count:10, gap:50, min:0.3 } },
+    quadtwin:  { srcKey:'quadtwin',  w:QT_C*2, h:QT_C*2, cx:QT_C, cy:QT_C, radius:T1_R, rotOffset:0, barrels:QT_BARRELS, fireMul:2.4, dmgMul:0.55 },  // 8 bullets, four twin pairs
+    quintet:   { srcKey:'quintet',   w:OVLD_C*2, h:OVLD_C*2, cx:OVLD_C, cy:OVLD_C, radius:T1_R, rotOffset:0, barrels:OVLD_ANGLES.map(a=>({ angle:a, dist:OVLD_TIP })), fireMul:1.8, dmgMul:0.7 },  // 5 bullets, one out of each barrel
+    overlord:  { srcKey:'overlord',  w:OVLD_C*2, h:OVLD_C*2, cx:OVLD_C, cy:OVLD_C, radius:T1_R, rotOffset:0, barrels:OVLD_ANGLES.map(a=>({ angle:a, dist:OVLD_TIP })), maxDrones:12 },
     overseer:  { srcKey:'overseer',  w:OVSR_C*2, h:OVSR_C*2, cx:OVSR_C, cy:OVSR_C, radius:T1_R, rotOffset:0, barrels:[{ angle:Math.PI/2, dist:OVSR_TIP }, { angle:-Math.PI/2, dist:OVSR_TIP }] },
     destroyer: { srcKey:'destroyer', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:SPRITE_DESTROYER_ROTATE_OFFSET, barrels:BARRELS_DESTROYER, bulletRadius:DESTROYER_BULLET_RADIUS, fireMul:2.2, dmgMul:2.5 },
   };
@@ -1159,16 +1215,22 @@
     gunner: SPRITE_SRC_GUNNER,
     hunter: SPRITE_SRC_HUNTER,
     predator: SPRITE_SRC_PREDATOR,
+    overlord: SPRITE_SRC_OVERLORD,
+    quintet: SPRITE_SRC_OVERLORD,
+    quadtwin: SPRITE_SRC_QUADTWIN,
     overseer: SPRITE_SRC_OVERSEER,
   };
   // Which loadout a player is using right now, given their kill count and
   // (once past LOADOUT7_KILLS / LOADOUT14_KILLS) their chosen picks.
-  const isDroneTank = (id)=> id === 'necro' || id === 'overseer';
+  const isDroneTank = (id)=> id === 'necro' || id === 'overseer' || id === 'overlord';
   function resolveLoadout(score, loadout7, loadout14, loadout20, forced, loadout1){
     if (forced && LOADOUTS[forced]) return forced;   // /admin tank override
     // 14- and 20-kill tiers removed for now (Triplet/Quad/Necromancer/Octo are admin-only),
     // except Hunter -> Predator at 20 kills (automatic, no choice).
-    if (score >= PREDATOR_KILLS && loadout7 === 'hunter') return 'predator';
+    if (score >= PREDATOR_KILLS && loadout7 === 'hunter') return loadout20 === 'quintet' ? 'quintet' : 'predator';  // 20-kill choice; Predator if you miss the popup
+    if (score >= PREDATOR_KILLS && loadout7 === 'parallel') return loadout20 === 'octo' ? 'octo' : 'quintet';       // Twin route, Diagonal: Quintet or Octo
+    if (score >= PREDATOR_KILLS && (loadout7 === 'triple' || loadout7 === 'quad')) return loadout20 === 'quadtwin' ? 'quadtwin' : 'triplet';  // Twin route, Triple/Quad: Triplet or Quad Twin
+    if (score >= PREDATOR_KILLS && loadout7 === 'overseer') return 'overlord';   // Sniper route, 20 kills: Hunter -> Predator, Overseer -> Overlord
     if (score >= LOADOUT7_KILLS && (loadout7 === 'triple' || loadout7 === 'parallel' || loadout7 === 'quad' || loadout7 === 'gunner' || loadout7 === 'destroyer' || loadout7 === 'overseer' || loadout7 === 'hunter')) return loadout7;
     if (score >= FIRST_PICK_KILLS) return TIER1_TANKS.indexOf(loadout1) >= 0 ? loadout1 : 'twin';  // undecided = twin
     return 'single';
@@ -1331,7 +1393,7 @@
     account: null, accountToken: null,   // { username, kills } | null -- signed-in account (cross-room kill total)
     leaderboard: [],         // [{username, kills}] -- public, server-pushed
     upgrades: freshUpgrades(),  // stacks of bonuses earned from kills, reset per sector join
-    spritesByLoadout: { single:{}, dual:{}, twin:{}, machinegun:{}, sniper:{}, gunner:{}, hunter:{}, predator:{}, overseer:{}, triple:{}, parallel:{}, omni:{}, triplet:{}, quad:{}, necro:{}, octo:{}, destroyer:{} }, // loadoutId -> colorId -> recolored <canvas>
+    spritesByLoadout: { single:{}, dual:{}, twin:{}, machinegun:{}, sniper:{}, gunner:{}, hunter:{}, predator:{}, quintet:{}, quadtwin:{}, overlord:{}, overseer:{}, triple:{}, parallel:{}, omni:{}, triplet:{}, quad:{}, necro:{}, octo:{}, destroyer:{} }, // loadoutId -> colorId -> recolored <canvas>
     remoteSmooth: {},      // peerId -> {x,y,turretAngle} smoothed render position (server ticks slower than 60fps)
     spritesReady: false,
     lastShot:0,
@@ -1515,7 +1577,7 @@
     });
   }
 
-  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', predator:'PREDATOR', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER' };
+  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', predator:'PREDATOR', quintet:'QUINTET', quadtwin:'QUAD TWIN', overlord:'OVERLORD', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER' };
   let choiceOptions = ['triple','parallel'];
   let choiceTier = 7;
   function buildLoadoutTiles(){
@@ -1548,7 +1610,7 @@
   function offerLoadoutChoice(tier){
     if (!state.spritesReady) return;
     choiceTier = tier;
-    choiceOptions = tier === 20 ? ['necro','octo'] : (tier === 14 ? ['triplet','quad'] : (tier === 1 ? TIER1_TANKS : (state.loadout1 === 'machinegun' ? ['gunner','destroyer'] : state.loadout1 === 'sniper' ? ['overseer','hunter'] : ['triple','quad','parallel'])));
+    choiceOptions = tier === 20 ? (state.loadout7 === 'parallel' ? ['quintet','octo'] : (state.loadout7 === 'hunter' ? ['predator','quintet'] : ['triplet','quadtwin'])) : (tier === 14 ? ['triplet','quad'] : (tier === 1 ? TIER1_TANKS : (state.loadout1 === 'machinegun' ? ['gunner','destroyer'] : state.loadout1 === 'sniper' ? ['overseer','hunter'] : ['triple','quad','parallel'])));
     buildLoadoutTiles(); // rebuild so previews reflect the player's current color
     byId('loadoutChoice').classList.add('show');
     clearTimeout(loadoutChoiceTimer);
@@ -2113,8 +2175,11 @@
         if (state.score === LOADOUT7_KILLS){
           offerLoadoutChoice(7);
         }
-        if (state.score === PREDATOR_KILLS && state.loadout7 === 'hunter'){
-          showToast('CANNON: PREDATOR');
+        if (state.score === PREDATOR_KILLS && ['hunter','parallel','triple','quad'].indexOf(state.loadout7) >= 0){
+          offerLoadoutChoice(20);   // Hunter: Predator/Quintet, Diagonal: Quintet/Octo, Triple or Quad: Triplet/Quad Twin
+        }
+        if (state.score === PREDATOR_KILLS && state.loadout7 === 'overseer'){
+          showToast('CANNON: OVERLORD');
         }
       }
       renderScoreStrip();
@@ -2426,7 +2491,7 @@
     const tune = LOADOUTS[loadoutId] || {};
     if (now - state.lastShot < effectiveFireCooldown() * (tune.fireMul || 1)) return;
     if (isDroneTank(loadoutId)){
-      if (state.drones.length >= MAX_DRONES) return; // 8 out at once, no more until some die
+      if (state.drones.length >= (LOADOUTS[loadoutId].maxDrones || MAX_DRONES)) return; // cap out at once, no more until some die
       state.lastShot = now;
       fireDrone(loadoutId);
       return;
@@ -2446,7 +2511,8 @@
     // either forward or backward (whichever end of that barrel it's from)
     // rather than along the barrel's own diagonal angle.
     function shotAngleFor(barrel, tipAngle){
-      if (loadoutId === 'triple' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo' || loadoutId === 'destroyer') return tipAngle;
+      if (barrel.aim !== undefined) return baseRot + barrel.aim;   // pair fires straight along its own axis
+      if (loadoutId === 'triple' || loadoutId === 'quintet' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo' || loadoutId === 'destroyer') return tipAngle;
       if (loadoutId === 'parallel' || loadoutId === 'necro'){
         let diff = tipAngle - state.turretAngle;
         while (diff > Math.PI) diff -= Math.PI*2;
@@ -2518,8 +2584,14 @@
     const def = LOADOUTS[loadoutId] || LOADOUTS.necro;
     const scale = TANK_R / def.radius;
     state.droneSide ^= 1; // alternate barrels: necro front/back, overseer left/right
-    const a = state.turretAngle + def.rotOffset + (loadoutId === 'overseer' ? (state.droneSide ? Math.PI/2 : -Math.PI/2) : (state.droneSide ? Math.PI : 0));
-    const dist = def.barrels[0].dist * scale;
+    let a = state.turretAngle + def.rotOffset + (loadoutId === 'overseer' ? (state.droneSide ? Math.PI/2 : -Math.PI/2) : (state.droneSide ? Math.PI : 0));
+    let dist = def.barrels[0].dist * scale;
+    if (loadoutId === 'overlord'){ // cycle through all five launchers
+      state.droneIdx = ((state.droneIdx || 0) + 1) % def.barrels.length;
+      const br = def.barrels[state.droneIdx];
+      a = state.turretAngle + def.rotOffset + br.angle;
+      dist = br.dist * scale;
+    }
     const spd = effectiveMoveSpeed();
     state.drones.push({
       id: ++state.droneSeq,
@@ -2540,7 +2612,8 @@
   function updateDrones(dt){
     const hud = byId('droneCount');
     const isNecro = isDroneTank(resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1));
-    hud.textContent = (isNecro && state.currentSector) ? 'DRONES ' + state.drones.length + '/' + MAX_DRONES : '';
+    const droneCap = LOADOUTS[resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1)].maxDrones || MAX_DRONES;
+    hud.textContent = (isNecro && state.currentSector) ? 'DRONES ' + state.drones.length + '/' + droneCap : '';
     if (!state.drones.length) return;
     const now = performance.now();
     const half = DRONE_SIZE / 2;
@@ -3626,7 +3699,7 @@
   // ---------------------------------------------------------------
   const ADMIN_TANKS = [
     ['single','SINGLE'], ['twin','TWIN'], ['machinegun','MACHINE GUN'], ['sniper','SNIPER'], ['gunner','GUNNER'], ['dual','OLD TWIN'], ['triple','TRIPLE'], ['parallel','DIAGONAL'], ['omni','OMNI'],
-    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['overseer','OVERSEER'], ['hunter','HUNTER'], ['predator','PREDATOR'],
+    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['overseer','OVERSEER'], ['hunter','HUNTER'], ['predator','PREDATOR'], ['quintet','QUINTET'], ['quadtwin','QUAD TWIN'], ['overlord','OVERLORD'],
   ];
   function openCmd(prefill){
     if (!state.room) return;
