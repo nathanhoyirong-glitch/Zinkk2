@@ -1017,8 +1017,8 @@
   }
   const SPRITE_SRC_QUINTET = buildQuintetSprite();
   // Overlord -- the 20-kill upgrade for players who chose Overseer at 7 kills.
-  // Four wide drone launchers on the diagonals (an X). The hull never rotates;
-  // all 10 drones are steered by the aim/fire joystick (see updateDrones).
+  // Four wide drone launchers on the diagonals (an X). The hull turns to face the
+  // move stick; all 10 drones are steered by the aim/fire joystick (see updateDrones).
   const OVLD_C = 75, OVLD_TIP = 51, OVLD_W = 54;
   const OVLD_ANGLES = [-135, -45, 45, 135].map(d=>d * Math.PI / 180);
   function buildOverlordSprite(){
@@ -2622,7 +2622,7 @@
     if (loadoutId === 'overlord'){ // cycle through all five launchers
       state.droneIdx = ((state.droneIdx || 0) + 1) % def.barrels.length;
       const br = def.barrels[state.droneIdx];
-      a = br.angle;   // fixed launchers: the hull doesn't rotate
+      a = state.turretAngle + def.rotOffset + br.angle;   // launchers turn with the hull
       dist = br.dist * scale;
     }
     const spd = effectiveMoveSpeed();
@@ -2925,6 +2925,10 @@
         if (canOccupy(nx, state.y)) state.x = nx;
         if (canOccupy(state.x, ny)) state.y = ny;
         state.moveAngle = Math.atan2(dy, dx);
+        // Overlord only: the move stick turns the hull to face the direction of travel
+        // (turretAngle is what gets drawn and synced to other players)
+        if (resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) === 'overlord')
+          state.turretAngle = state.moveAngle;
       }
 
       checkTankRamDamage();
@@ -2933,7 +2937,7 @@
 
       if (state.aimVec.mag > 0.12){
         if (resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) !== 'overlord')
-          state.turretAngle = Math.atan2(state.aimVec.y, state.aimVec.x);   // Overlord: the aim joystick steers drones, not the hull
+          state.turretAngle = Math.atan2(state.aimVec.y, state.aimVec.x);   // Overlord: the aim joystick steers drones, the MOVE stick turns the hull
         tryFire();
       }
       // Overlord: drones refill (up to 10) whenever you move or touch the aim/fire stick
@@ -3321,7 +3325,7 @@
     const scale = TANK_R / def.radius;
 
     if (sprite){
-      ctx.rotate(loadoutId === 'overlord' ? 0 : turretAngle + def.rotOffset);   // Overlord hull never rotates
+      ctx.rotate(turretAngle + def.rotOffset);   // Overlord hull rotates with the move stick
       ctx.drawImage(
         sprite,
         -def.cx*scale, -def.cy*scale,
