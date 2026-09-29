@@ -815,6 +815,7 @@
   const MAX_DRONES = 8;                    // per player
   const DRONE_HP_RATIO = 0.5;              // a drone has half of its owner's max health
   const DRONE_SIZE = 17.6;                 // drone square side; hull square side is 32 -> 0.55 ratio
+  const PREDATOR_KILLS = 20;  // kills for a Hunter to become the Predator
   const LOADOUT20_KILLS = 20; // kills needed to become the Necromancer (square bullets only)
   const LOADOUT14_KILLS = 14; // kills needed to unlock the 14-kill cannon (pick triplet or quad)
 
@@ -972,6 +973,26 @@
     return c.toDataURL();
   }
   const SPRITE_SRC_HUNTER = buildHunterSprite();
+  // Predator -- the 20-kill upgrade for players who chose Hunter at 7 kills.
+  // A long dark barrel with a light base block and four stacked light slots;
+  // fires a 10-bullet burst and turns invisible while standing still.
+  const PRED_TIP = 82, PRED_W = 34, PRED_BASE_END = 47, PRED_BASE_W = 29, PRED_SLOT_W = 26.5, PRED_SLOT_T = 4.5, PRED_SLOTS = [56.7, 63.8, 70.5, 76.4];
+  function buildPredatorSprite(){
+    const c = document.createElement('canvas');
+    c.width = T1_CX + PRED_TIP + 6; c.height = T1_H;
+    const g = c.getContext('2d');
+    g.translate(T1_CX, T1_CY);
+    g.fillStyle = '#777777';
+    g.beginPath(); g.roundRect(10, -PRED_W/2, PRED_TIP - 10, PRED_W, 2); g.fill();
+    g.fillStyle = '#999999';
+    g.fillRect(10, -PRED_BASE_W/2, PRED_BASE_END - 10, PRED_BASE_W);
+    PRED_SLOTS.forEach(cx=>{ g.fillRect(cx - PRED_SLOT_T/2, -PRED_SLOT_W/2, PRED_SLOT_T, PRED_SLOT_W); });
+    g.fillStyle = '#6ee39a';
+    g.beginPath(); g.arc(0, 0, T1_R, 0, Math.PI*2); g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#3a3a42'; g.stroke();
+    return c.toDataURL();
+  }
+  const SPRITE_SRC_PREDATOR = buildPredatorSprite();
   // Overseer -- the other Sniper 7-kill upgrade. Two trapezoid drone
   // launchers on the sides (wider at the muzzle); launches drones (see fireDrone).
   const OVSR_C = 70, OVSR_TIP = 64, OVSR_BASE_W = 26, OVSR_TIP_W = 42;
@@ -1116,7 +1137,8 @@
     twin:      { srcKey:'twin',      w:SPRITE_W,          h:SPRITE_H,          cx:SPRITE_CX,          cy:SPRITE_CY,          radius:SPRITE_RADIUS,          rotOffset:SPRITE_ROTATE_OFFSET,       barrels:BARRELS },  // swapped: the angled two-barrel design is now the real Twin
     machinegun:{ srcKey:'machinegun',w:T1_CX+MG_TIP+6,      h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:MG_TIP }],     fireMul:0.4, dmgMul:0.6, speedMul:0.95, spread:0.1 },
     sniper:    { srcKey:'sniper',    w:T1_CX+SNIPER_TIP+6,  h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:SNIPER_TIP }], fireMul:1.5, dmgMul:1.6, speedMul:1.7 },
-    hunter:    { srcKey:'hunter',    w:T1_CX+HUNTER_TIP+6, h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:HUNTER_TIP, rMul:0.6 }, { angle:0, dist:HUNTER_BODY_END, rMul:1 }], fireMul:1.6, dmgMul:0.9, speedMul:1.6 },
+    hunter:    { srcKey:'hunter',    w:T1_CX+HUNTER_TIP+6, h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:HUNTER_TIP }], fireMul:3, dmgMul:0.6, speedMul:1.4, bulletRadius:HUNTER_BODY_W/2, burst:{ count:5, gap:70, min:0.3 } },  // 5-shot burst, bullets grow from 30% to the big (hull-side) barrel's size
+    predator:  { srcKey:'predator',  w:T1_CX+PRED_TIP+6, h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:PRED_TIP }], fireMul:4, dmgMul:0.5, speedMul:1.5, bulletRadius:PRED_W/2, burst:{ count:10, gap:50, min:0.3 } },
     overseer:  { srcKey:'overseer',  w:OVSR_C*2, h:OVSR_C*2, cx:OVSR_C, cy:OVSR_C, radius:T1_R, rotOffset:0, barrels:[{ angle:Math.PI/2, dist:OVSR_TIP }, { angle:-Math.PI/2, dist:OVSR_TIP }] },
     destroyer: { srcKey:'destroyer', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:SPRITE_DESTROYER_ROTATE_OFFSET, barrels:BARRELS_DESTROYER, bulletRadius:DESTROYER_BULLET_RADIUS, fireMul:2.2, dmgMul:2.5 },
   };
@@ -1136,6 +1158,7 @@
     sniper: SPRITE_SRC_SNIPER,
     gunner: SPRITE_SRC_GUNNER,
     hunter: SPRITE_SRC_HUNTER,
+    predator: SPRITE_SRC_PREDATOR,
     overseer: SPRITE_SRC_OVERSEER,
   };
   // Which loadout a player is using right now, given their kill count and
@@ -1143,7 +1166,9 @@
   const isDroneTank = (id)=> id === 'necro' || id === 'overseer';
   function resolveLoadout(score, loadout7, loadout14, loadout20, forced, loadout1){
     if (forced && LOADOUTS[forced]) return forced;   // /admin tank override
-    // 14- and 20-kill tiers removed for now (Triplet/Quad/Necromancer/Octo are admin-only)
+    // 14- and 20-kill tiers removed for now (Triplet/Quad/Necromancer/Octo are admin-only),
+    // except Hunter -> Predator at 20 kills (automatic, no choice).
+    if (score >= PREDATOR_KILLS && loadout7 === 'hunter') return 'predator';
     if (score >= LOADOUT7_KILLS && (loadout7 === 'triple' || loadout7 === 'parallel' || loadout7 === 'quad' || loadout7 === 'gunner' || loadout7 === 'destroyer' || loadout7 === 'overseer' || loadout7 === 'hunter')) return loadout7;
     if (score >= FIRST_PICK_KILLS) return TIER1_TANKS.indexOf(loadout1) >= 0 ? loadout1 : 'twin';  // undecided = twin
     return 'single';
@@ -1306,7 +1331,7 @@
     account: null, accountToken: null,   // { username, kills } | null -- signed-in account (cross-room kill total)
     leaderboard: [],         // [{username, kills}] -- public, server-pushed
     upgrades: freshUpgrades(),  // stacks of bonuses earned from kills, reset per sector join
-    spritesByLoadout: { single:{}, dual:{}, twin:{}, machinegun:{}, sniper:{}, gunner:{}, hunter:{}, overseer:{}, triple:{}, parallel:{}, omni:{}, triplet:{}, quad:{}, necro:{}, octo:{}, destroyer:{} }, // loadoutId -> colorId -> recolored <canvas>
+    spritesByLoadout: { single:{}, dual:{}, twin:{}, machinegun:{}, sniper:{}, gunner:{}, hunter:{}, predator:{}, overseer:{}, triple:{}, parallel:{}, omni:{}, triplet:{}, quad:{}, necro:{}, octo:{}, destroyer:{} }, // loadoutId -> colorId -> recolored <canvas>
     remoteSmooth: {},      // peerId -> {x,y,turretAngle} smoothed render position (server ticks slower than 60fps)
     spritesReady: false,
     lastShot:0,
@@ -1324,6 +1349,7 @@
     chatUnread: 0,
     keys: {},
     moveVec: {x:0, y:0, mag:0},
+    stealthHidden: false, selfAlpha: 1, stealthFade: {},
     aimVec: {x:0, y:0, mag:0},
     zoneEnteredAt: null,   // performance.now() timestamp we last continuously entered a hazard zone (fortress bunker)
     unsubShoot: null,
@@ -1489,7 +1515,7 @@
     });
   }
 
-  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER' };
+  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', predator:'PREDATOR', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER' };
   let choiceOptions = ['triple','parallel'];
   let choiceTier = 7;
   function buildLoadoutTiles(){
@@ -2087,6 +2113,9 @@
         if (state.score === LOADOUT7_KILLS){
           offerLoadoutChoice(7);
         }
+        if (state.score === PREDATOR_KILLS && state.loadout7 === 'hunter'){
+          showToast('CANNON: PREDATOR');
+        }
       }
       renderScoreStrip();
     });
@@ -2408,6 +2437,7 @@
 
     const def = LOADOUTS[loadoutId];
     const scale = TANK_R / def.radius;
+    if (def.burst){ fireBurst(def, spd, dmg, scale); return; }
     const baseRot = state.turretAngle + def.rotOffset;
     // single/dual fly straight along the aim direction (barrels just decide
     // the spawn point). triple is a genuine spread shot, each bullet
@@ -2438,7 +2468,7 @@
 
     const pierce = effectivePierce();
     const bulletR = def.bulletRadius ? def.bulletRadius * scale : BULLET_R;
-    shots.forEach((s,i)=>{ s.r = bulletR * (def.barrels[i].rMul || 1); });
+    shots.forEach(s=>{ s.r = bulletR; });
     shots.forEach(s=>{
       spawnBullet(s.id, state.myPeerId, state.name, s.x, s.y, s.angle, state.color.hex, spd, dmg, loadoutId === 'necro', state.team, pierce, s.r);
     });
@@ -2448,6 +2478,33 @@
         color: state.color.id, team: state.team, roomId: state.currentSector, speed: spd, damage: dmg,
         square: loadoutId === 'necro', pierce
       });
+    }
+  }
+
+  // Hunter burst: `count` bullets in quick succession, growing from
+  // def.burst.min x the big barrel's bullet size up to the full size.
+  // Each bullet is spawned (and broadcast) when it fires, from wherever
+  // the tank is aiming at that moment.
+  function fireBurst(def, spd, dmg, scale){
+    const b = def.burst, pierce = effectivePierce();
+    for (let i = 0; i < b.count; i++){
+      setTimeout(()=>{
+        if (!state.alive || !state.currentSector) return;
+        const t = b.count > 1 ? i / (b.count - 1) : 1;
+        const r = def.bulletRadius * scale * (b.min + (1 - b.min) * t);
+        const a = state.turretAngle + def.rotOffset;
+        const dist = def.barrels[0].dist * scale;
+        const x = state.x + Math.cos(a) * dist, y = state.y + Math.sin(a) * dist;
+        const id = (state.myPeerId||'me') + '-' + performance.now().toFixed(0) + '-b' + i + '-' + Math.floor(Math.random()*1000);
+        spawnBullet(id, state.myPeerId, state.name, x, y, state.turretAngle, state.color.hex, spd, dmg, false, state.team, pierce, r);
+        if (state.room){
+          state.room.emit('shoot', {
+            shots: [{ id, x, y, angle: state.turretAngle, r }], shooterId: state.myPeerId, shooterName: state.name,
+            color: state.color.id, team: state.team, roomId: state.currentSector, speed: spd, damage: dmg,
+            square: false, pierce
+          });
+        }
+      }, i * b.gap);
     }
   }
 
@@ -2764,10 +2821,16 @@
         tryFire();
       }
 
+      // Predator stealth: hidden unless moving or shooting (burst + 0.5s afterglow)
+      const stealthNow = performance.now();
+      const isPredator = resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) === 'predator';
+      state.stealthHidden = isPredator && dx === 0 && dy === 0 && (stealthNow - state.lastShot > 1000);
+      state.selfAlpha += ((state.stealthHidden ? 0.28 : 1) - state.selfAlpha) * Math.min(1, dt * 8);
+
       const nowMs = performance.now();
       if (state.room && (nowMs - state.lastPresenceSend > 50)){
         state.lastPresenceSend = nowMs;
-        const patch = { x: state.x, y: state.y, turretAngle: state.turretAngle };
+        const patch = { x: state.x, y: state.y, turretAngle: state.turretAngle, hidden: !!state.stealthHidden };
         if (effectiveRegenPerSec() > 0) patch.hp = Math.floor(state.hp);
         if (state.drones.length || state.dronesSent){
           patch.drones = state.drones.map(d=>[d.id, Math.round(d.x*10)/10, Math.round(d.y*10)/10, Math.round(d.ang*100)/100, d.hp, d.maxHp]);
@@ -3036,12 +3099,18 @@
       if (p.presence.alive === false) return;
       if (p.presence.x === undefined) return;
       const s = state.remoteSmooth[p.peer] || { x: p.presence.x, y: p.presence.y, angle: p.presence.turretAngle||0 };
-      drawTank(s.x, s.y, s.angle, p.presence.color, nameLabel(p.peer, state.currentSector), p.presence.hp, p.presence.maxHp || MAX_HP, resolveLoadout(p.presence.score||0, p.presence.loadout7, p.presence.loadout14, p.presence.loadout20, p.presence.adminTank, p.presence.loadout1), p.presence.streak||0, !!p.presence.admin);
+      const remoteLoadout = resolveLoadout(p.presence.score||0, p.presence.loadout7, p.presence.loadout14, p.presence.loadout20, p.presence.adminTank, p.presence.loadout1);
+      // invisible Predators: teammates see a faint ghost, everyone else sees nothing
+      const ally = state.team && p.presence.team === state.team;
+      const fadeTarget = (remoteLoadout === 'predator' && p.presence.hidden) ? (ally ? 0.3 : 0) : 1;
+      const fadeCur = state.stealthFade[p.peer] === undefined ? fadeTarget : state.stealthFade[p.peer];
+      const remoteAlpha = state.stealthFade[p.peer] = fadeCur + (fadeTarget - fadeCur) * 0.15;
+      drawTank(s.x, s.y, s.angle, p.presence.color, nameLabel(p.peer, state.currentSector), p.presence.hp, p.presence.maxHp || MAX_HP, remoteLoadout, p.presence.streak||0, !!p.presence.admin, remoteAlpha);
     });
 
     // my tank
     if (state.alive){
-      drawTank(state.x, state.y, state.turretAngle, state.color.id, nameLabel(state.myPeerId, state.currentSector), state.hp, effectiveMaxHp(), resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1), state.streak, state.adminUnlocked);
+      drawTank(state.x, state.y, state.turretAngle, state.color.id, nameLabel(state.myPeerId, state.currentSector), state.hp, effectiveMaxHp(), resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1), state.streak, state.adminUnlocked, state.selfAlpha);
     }
 
     // CTF flags (drawn above tanks so a carried flag reads clearly)
@@ -3108,10 +3177,13 @@
   // in a given frame so they all stay in sync with each other.
   function rainbowHue(t){ return (t / 20) % 360; }
 
-  function drawTank(x,y,turretAngle,colorId,name,hp,maxHp,loadoutId,streak,isAdmin){
+  function drawTank(x,y,turretAngle,colorId,name,hp,maxHp,loadoutId,streak,isAdmin,alpha){
+    if (alpha === undefined) alpha = 1;
+    if (alpha < 0.02) return; // fully cloaked
     maxHp = maxHp || MAX_HP;
     loadoutId = LOADOUTS[loadoutId] ? loadoutId : 'single';
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.translate(x,y);
 
     const def = LOADOUTS[loadoutId];
@@ -3133,6 +3205,7 @@
     }
 
     ctx.restore();
+    ctx.save(); ctx.globalAlpha = alpha;
 
     // health bar + name (+ kill streak, drawn just to the right of the name)
     const pal = canvasPalette();
@@ -3154,6 +3227,7 @@
     ctx.fillRect(x-barW/2, y-TANK_R-10, barW, 4);
     ctx.fillStyle = (hp>50) ? '#6ee39a' : (hp>20 ? '#e3a857' : '#e35e6e');
     ctx.fillRect(x-barW/2, y-TANK_R-10, barW * Math.max(0,(hp||0))/maxHp, 4);
+    ctx.restore();
   }
 
   function loop(t){
@@ -3552,7 +3626,7 @@
   // ---------------------------------------------------------------
   const ADMIN_TANKS = [
     ['single','SINGLE'], ['twin','TWIN'], ['machinegun','MACHINE GUN'], ['sniper','SNIPER'], ['gunner','GUNNER'], ['dual','OLD TWIN'], ['triple','TRIPLE'], ['parallel','DIAGONAL'], ['omni','OMNI'],
-    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['overseer','OVERSEER'], ['hunter','HUNTER'],
+    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['overseer','OVERSEER'], ['hunter','HUNTER'], ['predator','PREDATOR'],
   ];
   function openCmd(prefill){
     if (!state.room) return;
