@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
@@ -28,9 +28,8 @@
     --panel-rgb: 16,26,21;
     --on-accent: #07120c;
   }
-  /* This console defaults to a fixed dark tactical theme regardless of
-     system preference -- like a physical instrument panel, not a themed
-     page. A light variant is available as an explicit user choice
+  /* This console defaults to the light (white) theme regardless of
+     system preference. A dark variant is available as an explicit user choice
      (Settings -> Display), not tied to prefers-color-scheme. */
   @media (prefers-color-scheme: light) { :root { color-scheme: dark; } }
 
@@ -796,6 +795,8 @@
   // ---------------------------------------------------------------
   const ARENA_W = 1190, ARENA_H = 1680;  // A3-proportioned (1 : 1.414) map
   const ZOOM = 1.3;                      // world units -> CSS px; >1 zooms in a bit
+  const FOV_MULT = 1.5;                  // Sniper & Hunter see 1.5x more of the map (width and height)
+  let curZoom = ZOOM, lastZoomT = 0, viewCssW = 620 * ZOOM, viewCssH = 875 * ZOOM;
   let VIEW_W = 620, VIEW_H = 875;        // camera viewport in world units -- recomputed to fill the screen
   const TANK_R = 18;             // collision + visual radius of the tank's hull
   const TANK_SPEED = 300;        // px/s
@@ -812,6 +813,7 @@
   const LOADOUT7_KILLS = 7;  // kills needed to auto-unlock the triple cannon
   const GRID_SIZE = 30;                    // map grid square, world units (matches the drawn grid)
   const DRONE_RANGE = 10 * GRID_SIZE;      // drones chase anything within 10 map squares
+  const DRONE_CTRL_REACH = 15 * GRID_SIZE; // Overlord: how far from the tank a full joystick push sends the drones
   const MAX_DRONES = 8;                    // per player
   const DRONE_HP_RATIO = 0.5;              // a drone has half of its owner's max health
   const DRONE_SIZE = 17.6;                 // drone square side; hull square side is 32 -> 0.55 ratio
@@ -993,11 +995,32 @@
     return c.toDataURL();
   }
   const SPRITE_SRC_PREDATOR = buildPredatorSprite();
+  // Quintet art -- five bullet barrels around the hull (angles measured from the design image).
+  const QUIN_C = 75, QUIN_TIP = 61, QUIN_W = 33;
+  const QUIN_ANGLES = [-132, -44, 34, 105, 166].map(d=>d * Math.PI / 180);
+  function buildQuintetSprite(){
+    const c = document.createElement('canvas');
+    c.width = QUIN_C*2; c.height = QUIN_C*2;
+    const g = c.getContext('2d');
+    g.translate(QUIN_C, QUIN_C);
+    g.fillStyle = '#999999'; g.strokeStyle = '#4d4d4d'; g.lineWidth = 3; g.lineJoin = 'miter';
+    QUIN_ANGLES.forEach(a=>{
+      g.save(); g.rotate(a);
+      g.fillRect(10, -QUIN_W/2, QUIN_TIP - 10, QUIN_W);
+      g.strokeRect(10, -QUIN_W/2, QUIN_TIP - 10, QUIN_W);
+      g.restore();
+    });
+    g.fillStyle = '#6ee39a';
+    g.beginPath(); g.arc(0, 0, T1_R, 0, Math.PI*2); g.fill();
+    g.lineWidth = 3; g.strokeStyle = '#3a3a42'; g.stroke();
+    return c.toDataURL();
+  }
+  const SPRITE_SRC_QUINTET = buildQuintetSprite();
   // Overlord -- the 20-kill upgrade for players who chose Overseer at 7 kills.
-  // Five drone launchers around the hull (angles measured from the design
-  // image); it cycles through them and can keep more drones out at once.
-  const OVLD_C = 75, OVLD_TIP = 61, OVLD_W = 33;
-  const OVLD_ANGLES = [-132, -44, 34, 105, 166].map(d=>d * Math.PI / 180);
+  // Four wide drone launchers on the diagonals (an X). The hull never rotates;
+  // all 10 drones are steered by the aim/fire joystick (see updateDrones).
+  const OVLD_C = 75, OVLD_TIP = 51, OVLD_W = 54;
+  const OVLD_ANGLES = [-135, -45, 45, 135].map(d=>d * Math.PI / 180);
   function buildOverlordSprite(){
     const c = document.createElement('canvas');
     c.width = OVLD_C*2; c.height = OVLD_C*2;
@@ -1193,8 +1216,8 @@
     hunter:    { srcKey:'hunter',    w:T1_CX+HUNTER_TIP+6, h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:HUNTER_TIP }], fireMul:3, dmgMul:0.6, speedMul:1.4, bulletRadius:HUNTER_BODY_W/2, burst:{ count:5, gap:70, min:0.3 } },  // 5-shot burst, bullets grow from 30% to the big (hull-side) barrel's size
     predator:  { srcKey:'predator',  w:T1_CX+PRED_TIP+6, h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:PRED_TIP }], fireMul:4, dmgMul:0.5, speedMul:1.5, bulletRadius:PRED_W/2, burst:{ count:10, gap:50, min:0.3 } },
     quadtwin:  { srcKey:'quadtwin',  w:QT_C*2, h:QT_C*2, cx:QT_C, cy:QT_C, radius:T1_R, rotOffset:0, barrels:QT_BARRELS, fireMul:2.4, dmgMul:0.55 },  // 8 bullets, four twin pairs
-    quintet:   { srcKey:'quintet',   w:OVLD_C*2, h:OVLD_C*2, cx:OVLD_C, cy:OVLD_C, radius:T1_R, rotOffset:0, barrels:OVLD_ANGLES.map(a=>({ angle:a, dist:OVLD_TIP })), fireMul:1.8, dmgMul:0.7 },  // 5 bullets, one out of each barrel
-    overlord:  { srcKey:'overlord',  w:OVLD_C*2, h:OVLD_C*2, cx:OVLD_C, cy:OVLD_C, radius:T1_R, rotOffset:0, barrels:OVLD_ANGLES.map(a=>({ angle:a, dist:OVLD_TIP })), maxDrones:12 },
+    quintet:   { srcKey:'quintet',   w:QUIN_C*2, h:QUIN_C*2, cx:QUIN_C, cy:QUIN_C, radius:T1_R, rotOffset:0, barrels:QUIN_ANGLES.map(a=>({ angle:a, dist:QUIN_TIP })), fireMul:1.8, dmgMul:0.7 },  // 5 bullets, one out of each barrel
+    overlord:  { srcKey:'overlord',  w:OVLD_C*2, h:OVLD_C*2, cx:OVLD_C, cy:OVLD_C, radius:T1_R, rotOffset:0, barrels:OVLD_ANGLES.map(a=>({ angle:a, dist:OVLD_TIP })), maxDrones:10, fireMul:0.4 },
     overseer:  { srcKey:'overseer',  w:OVSR_C*2, h:OVSR_C*2, cx:OVSR_C, cy:OVSR_C, radius:T1_R, rotOffset:0, barrels:[{ angle:Math.PI/2, dist:OVSR_TIP }, { angle:-Math.PI/2, dist:OVSR_TIP }] },
     destroyer: { srcKey:'destroyer', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:SPRITE_DESTROYER_ROTATE_OFFSET, barrels:BARRELS_DESTROYER, bulletRadius:DESTROYER_BULLET_RADIUS, fireMul:2.2, dmgMul:2.5 },
   };
@@ -1216,7 +1239,7 @@
     hunter: SPRITE_SRC_HUNTER,
     predator: SPRITE_SRC_PREDATOR,
     overlord: SPRITE_SRC_OVERLORD,
-    quintet: SPRITE_SRC_OVERLORD,
+    quintet: SPRITE_SRC_QUINTET,
     quadtwin: SPRITE_SRC_QUADTWIN,
     overseer: SPRITE_SRC_OVERSEER,
   };
@@ -1341,7 +1364,7 @@
   // ---------------------------------------------------------------
   const SETTINGS_KEY = 'tankArenaSettings';
   function loadSettings(){
-    const defaults = { moveMult: 1, bulletMult: 1, sensMult: 1, theme: 'dark' };
+    const defaults = { moveMult: 1, bulletMult: 1, sensMult: 1, theme: 'light' };   // light (white) mode is the default
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       if (!raw) return defaults;
@@ -1350,7 +1373,9 @@
         moveMult: clampSetting(parsed.moveMult, 0.5, 2, 1),
         bulletMult: clampSetting(parsed.bulletMult, 0.5, 2, 1),
         sensMult: clampSetting(parsed.sensMult, 0.5, 2, 1),
-        theme: parsed.theme === 'light' ? 'light' : 'dark',
+        // only keep a saved DARK theme if the player picked it themselves; everyone else gets light
+        theme: (parsed.themeChosen && parsed.theme !== 'light') ? 'dark' : 'light',
+        themeChosen: !!parsed.themeChosen,
       };
     } catch(e){ return defaults; }
   }
@@ -1363,7 +1388,7 @@
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings)); } catch(e){}
   }
   function applyTheme(){
-    document.documentElement.setAttribute('data-theme', state.settings.theme === 'light' ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-theme', state.settings.theme === 'dark' ? 'dark' : 'light');
   }
 
   const state = {
@@ -1412,7 +1437,7 @@
     keys: {},
     moveVec: {x:0, y:0, mag:0},
     stealthHidden: false, selfAlpha: 1, stealthFade: {},
-    aimVec: {x:0, y:0, mag:0},
+    aimVec: {x:0, y:0, mag:0}, aimTouched: false,
     zoneEnteredAt: null,   // performance.now() timestamp we last continuously entered a hazard zone (fortress bunker)
     unsubShoot: null,
     unsubKill: null,
@@ -2029,11 +2054,17 @@
     const rect = canvas.getBoundingClientRect();
     const cssW = Math.max(1, rect.width);
     const cssH = Math.max(1, rect.height);
-    VIEW_W = cssW / ZOOM;
-    VIEW_H = cssH / ZOOM;
+    viewCssW = cssW; viewCssH = cssH;
     canvas.width = Math.round(cssW * dpr);
     canvas.height = Math.round(cssH * dpr);
-    ctx.setTransform(dpr * ZOOM, 0, 0, dpr * ZOOM, 0, 0);
+    applyZoom(curZoom);
+  }
+  // zoom < ZOOM shows more of the world; VIEW_W/H are the visible world size
+  function applyZoom(z){
+    curZoom = z;
+    VIEW_W = viewCssW / z;
+    VIEW_H = viewCssH / z;
+    ctx.setTransform(dpr * z, 0, 0, dpr * z, 0, 0);
   }
   window.addEventListener('resize', fitCanvas);
 
@@ -2417,7 +2448,7 @@
   // ---- input ----
   const JOY_MAX = 40; // px the nub can travel from center
 
-  function setupJoystick(rootEl, nubEl, onVec){
+  function setupJoystick(rootEl, nubEl, onVec, onActive){
     let pointerId = null;
     function apply(clientX, clientY){
       const rect = rootEl.getBoundingClientRect();
@@ -2435,10 +2466,12 @@
     function reset(){
       nubEl.style.transform = 'translate(-50%,-50%)';
       onVec(0,0,0);
+      if (onActive) onActive(false);
     }
     rootEl.addEventListener('pointerdown', (e)=>{
       pointerId = e.pointerId;
       try { rootEl.setPointerCapture(pointerId); } catch(err){}
+      if (onActive) onActive(true);
       apply(e.clientX, e.clientY);
       e.preventDefault();
     });
@@ -2466,7 +2499,7 @@
     });
     setupJoystick(byId('joyAim'), byId('joyAimNub'), (x,y,mag)=>{
       state.aimVec = {x,y,mag};
-    });
+    }, (down)=>{ state.aimTouched = down; });   // aimTouched: finger on the aim/fire stick, even before it leaves centre
   }
 
   function onKeyDown(e){
@@ -2589,7 +2622,7 @@
     if (loadoutId === 'overlord'){ // cycle through all five launchers
       state.droneIdx = ((state.droneIdx || 0) + 1) % def.barrels.length;
       const br = def.barrels[state.droneIdx];
-      a = state.turretAngle + def.rotOffset + br.angle;
+      a = br.angle;   // fixed launchers: the hull doesn't rotate
       dist = br.dist * scale;
     }
     const spd = effectiveMoveSpeed();
@@ -2628,6 +2661,14 @@
       enemies.push({ x, y });
     });
     const k = 1 - Math.exp(-dt / 0.12); // steering smoothness
+    // Overlord: no auto-chase. While the aim/fire joystick is held, ALL drones fly to the point the
+    // stick points at (farther push = farther point); released, they hover around the tank.
+    const manual = resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) === 'overlord';
+    let ctrlPt = null;
+    if (manual && state.aimVec.mag > 0.12){
+      const reach = Math.max(GRID_SIZE * 3, state.aimVec.mag * DRONE_CTRL_REACH);
+      ctrlPt = { x: state.x + state.aimVec.x * reach, y: state.y + state.aimVec.y * reach };
+    }
     // Separation: drones within this range of a sibling get pushed apart,
     // so a full swarm chasing the same target spreads into a cluster
     // instead of stacking directly on top of each other.
@@ -2641,13 +2682,14 @@
     const ORBIT_RADIUS = GRID_SIZE * 2;
     state.drones = state.drones.filter((d, i)=>{
       let best = null, bd = DRONE_RANGE * DRONE_RANGE;
-      for (const e of enemies){
+      if (manual) best = ctrlPt;
+      else for (const e of enemies){
         const dx = e.x - d.x, dy = e.y - d.y, dd = dx*dx + dy*dy;
         if (dd < bd){ bd = dd; best = e; }
       }
       let tx, ty, sp;
       if (best){
-        tx = best.x; ty = best.y; sp = speed;             // chase
+        tx = best.x; ty = best.y; sp = manual ? speed * 1.25 : speed;   // chase (Overlord drones are a bit faster)
       } else {
         // nothing in range: hover in a circle around the owner, kept at
         // least 2 grid squares out so they never sit near the hull
@@ -2657,7 +2699,7 @@
         sp = speed * 0.8;
       }
       const dx = tx - d.x, dy = ty - d.y, len = Math.hypot(dx, dy) || 1;
-      const want = best ? sp : Math.min(sp, len * 5);
+      const want = (best && !manual) ? sp : Math.min(sp, len * 5);   // manual drones ease in to the target point
       let wx = dx/len * want, wy = dy/len * want;
       // sibling separation only applies while chasing -- on the idle ring
       // drones just follow their own ring position, so they can overlap
@@ -2890,9 +2932,13 @@
       updateHazardZone();
 
       if (state.aimVec.mag > 0.12){
-        state.turretAngle = Math.atan2(state.aimVec.y, state.aimVec.x);
+        if (resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) !== 'overlord')
+          state.turretAngle = Math.atan2(state.aimVec.y, state.aimVec.x);   // Overlord: the aim joystick steers drones, not the hull
         tryFire();
       }
+      // Overlord: drones refill (up to 10) whenever you move or touch the aim/fire stick
+      if ((dx !== 0 || dy !== 0 || state.aimTouched) &&
+          resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) === 'overlord') tryFire();
 
       // Predator stealth: hidden unless moving or shooting (burst + 0.5s afterglow)
       const stealthNow = performance.now();
@@ -3079,8 +3125,8 @@
       return {
         bg: '#f3f6f2',
         grid: 'rgba(31,138,82,0.10)',
-        obstacleFill: '#dbe6da',
-        obstacleStroke: '#a9bda6',
+        obstacleFill: '#c9c9c9',
+        obstacleStroke: '#8f8f8f',
         border: 'rgba(31,138,82,0.45)',
         nameText: 'rgba(22,33,26,0.85)',
         healthTrack: 'rgba(0,0,0,0.15)',
@@ -3091,8 +3137,8 @@
     return {
       bg: '#060b08',
       grid: 'rgba(110,227,154,0.06)',
-      obstacleFill: '#16241c',
-      obstacleStroke: '#2c4a3b',
+      obstacleFill: '#3b3d3c',
+      obstacleStroke: '#6a6d6b',
       border: 'rgba(110,227,154,0.35)',
       nameText: 'rgba(221,233,224,0.8)',
       healthTrack: 'rgba(0,0,0,0.5)',
@@ -3155,6 +3201,16 @@
 
   function draw(){
     if (!bgCanvas) buildBackground();
+    // Sniper & Hunter: ease the camera out to a 1.5x wider field of view (and back in when you change tank)
+    {
+      const zl = resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1);
+      const targetZoom = ZOOM / ((zl === 'sniper' || zl === 'hunter') ? FOV_MULT : 1);
+      const nowZ = performance.now();
+      const dtz = Math.min(0.1, (nowZ - (lastZoomT || nowZ)) / 1000);
+      lastZoomT = nowZ;
+      if (Math.abs(targetZoom - curZoom) > 0.0005) applyZoom(curZoom + (targetZoom - curZoom) * Math.min(1, dtz * 6));
+      else if (curZoom !== targetZoom) applyZoom(targetZoom);
+    }
     ctx.clearRect(0,0,VIEW_W,VIEW_H);
 
     // camera follows the local player, clamped so it never shows past the map edge
@@ -3265,7 +3321,7 @@
     const scale = TANK_R / def.radius;
 
     if (sprite){
-      ctx.rotate(turretAngle + def.rotOffset);
+      ctx.rotate(loadoutId === 'overlord' ? 0 : turretAngle + def.rotOffset);   // Overlord hull never rotates
       ctx.drawImage(
         sprite,
         -def.cx*scale, -def.cy*scale,
@@ -3330,7 +3386,7 @@
     state.bullets = []; state.sparks = []; state.killfeed = [];
     state.chatLog = []; state.chatUnread = 0; byId('chatBtn').classList.remove('has-unread');
     state.zoneEnteredAt = null; byId('zoneWarn').textContent = ''; byId('zoneWarn').classList.remove('low');
-    state.moveVec = {x:0,y:0,mag:0}; state.aimVec = {x:0,y:0,mag:0};
+    state.moveVec = {x:0,y:0,mag:0}; state.aimVec = {x:0,y:0,mag:0}; state.aimTouched = false;
     byId('joyMoveNub').style.transform = 'translate(-50%,-50%)';
     byId('joyAimNub').style.transform = 'translate(-50%,-50%)';
     clearTimeout(loadoutChoiceTimer);
@@ -3475,21 +3531,21 @@
     saveSettings();
   });
   byId('themeDarkBtn').addEventListener('click', ()=>{
-    state.settings.theme = 'dark';
+    state.settings.theme = 'dark'; state.settings.themeChosen = true;
     applyTheme();
     invalidateBackground();
     saveSettings();
     refreshSettingsUI();
   });
   byId('themeLightBtn').addEventListener('click', ()=>{
-    state.settings.theme = 'light';
+    state.settings.theme = 'light'; state.settings.themeChosen = true;
     applyTheme();
     invalidateBackground();
     saveSettings();
     refreshSettingsUI();
   });
   byId('settingsResetBtn').addEventListener('click', ()=>{
-    state.settings = { moveMult: 1, bulletMult: 1, sensMult: 1, theme: 'dark' };
+    state.settings = { moveMult: 1, bulletMult: 1, sensMult: 1, theme: 'light' };
     applyTheme();
     invalidateBackground();
     saveSettings();
@@ -3634,7 +3690,7 @@
       c.fillStyle = pal.hazardFill;
       MAPS[id].hazards.forEach(z=>c.fillRect(z.x*k, z.y*k, Math.max(2,z.w*k), Math.max(2,z.h*k)));
     }
-    c.fillStyle = state.settings.theme === 'light' ? '#6f8f77' : 'rgba(110,227,154,0.6)';
+    c.fillStyle = state.settings.theme === 'light' ? '#8f8f8f' : 'rgba(170,170,170,0.6)';
     MAPS[id].obstacles.forEach(o=>c.fillRect(o.x*k, o.y*k, Math.max(2,o.w*k), Math.max(2,o.h*k)));
   }
   function refreshHostUI(){
