@@ -1062,7 +1062,7 @@
 
   const LOADOUTS = {
     single:   { srcKey:'single',   w:SPRITE_SINGLE_W,   h:SPRITE_SINGLE_H,   cx:SPRITE_SINGLE_CX,   cy:SPRITE_SINGLE_CY,   radius:SPRITE_SINGLE_RADIUS,   rotOffset:0,                          barrels:[{ angle:0, dist: SPRITE_SINGLE_TIP_RATIO * SPRITE_SINGLE_RADIUS }] },
-    dual:     { srcKey:'dual',     w:SPRITE_W,          h:SPRITE_H,          cx:SPRITE_CX,          cy:SPRITE_CY,          radius:SPRITE_RADIUS,          rotOffset:SPRITE_ROTATE_OFFSET,       barrels:BARRELS },
+    dual:     { srcKey:'dual',     w:T1_CX+TWIN_TIP+6,    h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:TWIN_BARRELS },  // swapped: the parallel-barrel twin is now the admin-only "OLD TWIN"
     triple:   { srcKey:'triple',   w:SPRITE_TRIPLE_W,   h:SPRITE_TRIPLE_H,   cx:SPRITE_TRIPLE_CX,   cy:SPRITE_TRIPLE_CY,   radius:SPRITE_TRIPLE_RADIUS,   rotOffset:SPRITE_TRIPLE_ROTATE_OFFSET, barrels:BARRELS_TRIPLE },
     parallel: { srcKey:'parallel', w:SPRITE_PARALLEL_W, h:SPRITE_PARALLEL_H, cx:SPRITE_PARALLEL_CX, cy:SPRITE_PARALLEL_CY, radius:SPRITE_PARALLEL_RADIUS, rotOffset:SPRITE_PARALLEL_ROTATE_OFFSET, barrels:BARRELS_PARALLEL },
     triplet:  { srcKey:'triplet',  w:SPRITE_TRIPLET_W,  h:SPRITE_TRIPLET_H,  cx:SPRITE_TRIPLET_CX,  cy:SPRITE_TRIPLET_CY,  radius:SPRITE_TRIPLET_RADIUS,  rotOffset:SPRITE_TRIPLET_ROTATE_OFFSET, barrels:BARRELS_TRIPLET },
@@ -1071,14 +1071,14 @@
     necro:    { srcKey:'necro',    w:SPRITE_NECRO_W,    h:SPRITE_NECRO_H,    cx:SPRITE_NECRO_CX,    cy:SPRITE_NECRO_CY,    radius:SPRITE_NECRO_RADIUS,    rotOffset:SPRITE_NECRO_ROTATE_OFFSET,  barrels:BARRELS_NECRO },
     omni:     { srcKey:'omni',     w:SPRITE_OMNI_W,     h:SPRITE_OMNI_H,     cx:SPRITE_OMNI_CX,     cy:SPRITE_OMNI_CY,     radius:SPRITE_OMNI_RADIUS,     rotOffset:SPRITE_OMNI_ROTATE_OFFSET,   barrels:BARRELS_OMNI },
     gunner:    { srcKey:'gunner',    w:T1_CX+76+6,          h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:GUNNER_BARRELS, fireMul:0.8, dmgMul:0.4, spread:0.06, bulletRadius:7 },
-    twin:      { srcKey:'twin',      w:T1_CX+TWIN_TIP+6,    h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:TWIN_BARRELS },
+    twin:      { srcKey:'twin',      w:SPRITE_W,          h:SPRITE_H,          cx:SPRITE_CX,          cy:SPRITE_CY,          radius:SPRITE_RADIUS,          rotOffset:SPRITE_ROTATE_OFFSET,       barrels:BARRELS },  // swapped: the angled two-barrel design is now the real Twin
     machinegun:{ srcKey:'machinegun',w:T1_CX+MG_TIP+6,      h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:MG_TIP }],     fireMul:0.4, dmgMul:0.6, speedMul:0.95, spread:0.1 },
     sniper:    { srcKey:'sniper',    w:T1_CX+SNIPER_TIP+6,  h:T1_H, cx:T1_CX, cy:T1_CY, radius:T1_R, rotOffset:0, barrels:[{ angle:0, dist:SNIPER_TIP }], fireMul:1.5, dmgMul:1.6, speedMul:1.7 },
     destroyer: { srcKey:'destroyer', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:SPRITE_DESTROYER_ROTATE_OFFSET, barrels:BARRELS_DESTROYER, bulletRadius:DESTROYER_BULLET_RADIUS, fireMul:2.2, dmgMul:2.5 },
   };
   const LOADOUT_SOURCES = {
     single: SPRITE_SRC_SINGLE,
-    dual: SPRITE_SRC,
+    dual: SPRITE_SRC_TWIN,
     triple: SPRITE_SRC_TRIPLE,
     parallel: SPRITE_SRC_PARALLEL,
     omni: SPRITE_SRC_OMNI,
@@ -1087,7 +1087,7 @@
     necro: SPRITE_SRC_NECRO,
     octo: SPRITE_SRC_OCTO,
     destroyer: SPRITE_SRC_DESTROYER,
-    twin: SPRITE_SRC_TWIN,
+    twin: SPRITE_SRC,
     machinegun: SPRITE_SRC_MACHINEGUN,
     sniper: SPRITE_SRC_SNIPER,
     gunner: SPRITE_SRC_GUNNER,
