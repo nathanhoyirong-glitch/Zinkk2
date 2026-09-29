@@ -404,6 +404,12 @@
   .chatbar input:focus { outline:none; }
   .chat-send-btn { flex:0 0 auto; padding:0 12px; background:none; border:none; color:var(--green); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:0.06em; }
   .chat-send-btn:hover { text-decoration:underline; }
+  /* tank-choice panel: header stays put, the tile grid / player list scrolls */
+  .admin-panel { display:flex; flex-direction:column; max-height:calc(100vh - 40px); max-height:calc(100dvh - 40px); }
+  .admin-panel .settings-head { flex:0 0 auto; }
+  .admin-panel .admin-grid { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:1px; }
+  .admin-panel #adminPlayerStep { flex:1 1 auto; min-height:0; flex-direction:column; }
+  .admin-panel #adminPlayerStep .wait-list { flex:1 1 auto; min-height:0; max-height:none; }
   .admin-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:16px; }
   .admin-tile { display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px 4px; background:var(--panel-2); border:1px solid var(--line-bright); color:var(--ink-dim); font-size:10px; letter-spacing:0.06em; font-weight:700; min-height:82px; justify-content:center; }
   .admin-tile img { height:52px; width:auto; max-width:100%; object-fit:contain; pointer-events:none; }
@@ -712,7 +718,7 @@
 </div>
 
 <div class="settings-backdrop" id="adminBackdrop">
-  <div class="settings-panel host-panel bracket">
+  <div class="settings-panel host-panel admin-panel bracket">
     <span class="bl"></span><span class="br"></span>
     <div class="settings-head">
       <h3 id="adminPanelTitle">ADMIN &mdash; CHOOSE TANK</h3>
@@ -3831,7 +3837,7 @@
   function showAdminPlayerStep(){
     byId('adminPanelTitle').textContent = 'ADMIN \u2014 SWITCH WHOSE TANK?';
     byId('adminGrid').style.display = 'none';
-    byId('adminPlayerStep').style.display = 'block';
+    byId('adminPlayerStep').style.display = 'flex';
     renderAdminPlayerList();
   }
   function selectAdminTank(id){
