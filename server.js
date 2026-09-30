@@ -1532,6 +1532,67 @@ function indexHtml() {
   }
   const SPRITE_SRC_DESTROYER = buildDestroyerSprite();
 
+  // Firework -- the Destroyer's 20-kill upgrade. Stepped, tilted barrel
+  // (three stacked blocks, widest at the hull). Fires one big ball that
+  // bursts into 10 normal bullets in an even ring, like a firework.
+  const FIREWORK_TILT = DESTROYER_BARREL_TILT;
+  const FIREWORK_STEPS = [ {near:12, len:22, w:56}, {near:34, len:22, w:46}, {near:56, len:22, w:36} ];
+  const FIREWORK_TIP_DIST = 78;
+  const FIREWORK_BALL_RADIUS = 18;      // native-space radius -- half the muzzle block's width
+  const FIREWORK_FRAGMENTS = 10;
+  const FIREWORK_FUSE = 850;            // ms before the ball bursts on its own
+  function buildFireworkSprite(){
+    const c = document.createElement('canvas');
+    c.width = SPRITE_DESTROYER_W; c.height = SPRITE_DESTROYER_H;
+    const g = c.getContext('2d');
+    g.save();
+    g.translate(SPRITE_DESTROYER_CX, SPRITE_DESTROYER_CY);
+    g.rotate(FIREWORK_TILT);
+    g.fillStyle = '#999999'; g.strokeStyle = '#4d4d4d'; g.lineWidth = 3;
+    for (let i = FIREWORK_STEPS.length - 1; i >= 0; i--){   // draw tip first so wider blocks overlap it
+      const s = FIREWORK_STEPS[i];
+      g.fillRect(s.near, -s.w/2, s.len, s.w);
+      g.strokeRect(s.near, -s.w/2, s.len, s.w);
+    }
+    g.restore();
+    g.fillStyle = '#6ee39a';
+    g.beginPath();
+    g.arc(SPRITE_DESTROYER_CX, SPRITE_DESTROYER_CY, SPRITE_DESTROYER_RADIUS, 0, Math.PI*2);
+    g.fill();
+    g.lineWidth = 3;
+    g.strokeStyle = '#3a3a42';
+    g.stroke();
+    return c.toDataURL();
+  }
+  const SPRITE_SRC_FIREWORK = buildFireworkSprite();
+
+  // Behemoth -- Destroyer's other 20-kill upgrade. One huge square block
+  // lined up with the aim, about as wide as the hull is across; it fires
+  // bullets the size of the hull itself.
+  const BEHEMOTH_NEAR = 7;
+  const BEHEMOTH_SIDE = 78;
+  const BEHEMOTH_TIP_DIST = BEHEMOTH_NEAR + BEHEMOTH_SIDE;
+  function buildBehemothSprite(){
+    const c = document.createElement('canvas');
+    c.width = SPRITE_DESTROYER_W; c.height = SPRITE_DESTROYER_H;
+    const g = c.getContext('2d');
+    g.save();
+    g.translate(SPRITE_DESTROYER_CX, SPRITE_DESTROYER_CY);
+    g.fillStyle = '#a4a4ae'; g.strokeStyle = '#5a5e68'; g.lineWidth = 3;
+    g.fillRect(BEHEMOTH_NEAR, -BEHEMOTH_SIDE/2, BEHEMOTH_SIDE, BEHEMOTH_SIDE);
+    g.strokeRect(BEHEMOTH_NEAR, -BEHEMOTH_SIDE/2, BEHEMOTH_SIDE, BEHEMOTH_SIDE);
+    g.restore();
+    g.fillStyle = '#6ee39a';
+    g.beginPath();
+    g.arc(SPRITE_DESTROYER_CX, SPRITE_DESTROYER_CY, SPRITE_DESTROYER_RADIUS, 0, Math.PI*2);
+    g.fill();
+    g.lineWidth = 3;
+    g.strokeStyle = '#3a3a42';
+    g.stroke();
+    return c.toDataURL();
+  }
+  const SPRITE_SRC_BEHEMOTH = buildBehemothSprite();
+
   // ---- First-kill cannons (pick one at 1 kill): Twin / Machine Gun / Sniper ----
   // Drawn in code, same recipe as the destroyer: low-saturation gray barrels
   // (recolorSprite() leaves them alone) + a saturated hull that gets retuned
@@ -1841,6 +1902,8 @@ function indexHtml() {
     overlord:  { srcKey:'overlord',  w:OVLD_C*2, h:OVLD_C*2, cx:OVLD_C, cy:OVLD_C, radius:T1_R, rotOffset:0, barrels:OVLD_ANGLES.map(a=>({ angle:a, dist:OVLD_TIP })), maxDrones:10, fireMul:0.4 },
     overseer:  { srcKey:'overseer',  w:OVSR_C*2, h:OVSR_C*2, cx:OVSR_C, cy:OVSR_C, radius:T1_R, rotOffset:0, barrels:[{ angle:Math.PI/2, dist:OVSR_TIP }, { angle:-Math.PI/2, dist:OVSR_TIP }] },
     destroyer: { srcKey:'destroyer', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:SPRITE_DESTROYER_ROTATE_OFFSET, barrels:BARRELS_DESTROYER, bulletRadius:DESTROYER_BULLET_RADIUS, fireMul:2.2, dmgMul:2.5 },
+    firework:  { srcKey:'firework', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:0, barrels:[{ angle:FIREWORK_TILT, dist:FIREWORK_TIP_DIST }], bulletRadius:FIREWORK_BALL_RADIUS, fireMul:3, dmgMul:1.6, speedMul:0.75, firework:true },
+    behemoth:  { srcKey:'behemoth', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:0, barrels:[{ angle:0, dist:BEHEMOTH_TIP_DIST }], bulletRadius:SPRITE_DESTROYER_RADIUS, fireMul:2.8, dmgMul:3.2, speedMul:0.8 },
   };
   const LOADOUT_SOURCES = {
     single: SPRITE_SRC_SINGLE,
@@ -1853,6 +1916,8 @@ function indexHtml() {
     necro: SPRITE_SRC_NECRO,
     octo: SPRITE_SRC_OCTO,
     destroyer: SPRITE_SRC_DESTROYER,
+    firework: SPRITE_SRC_FIREWORK,
+    behemoth: SPRITE_SRC_BEHEMOTH,
     twin: SPRITE_SRC,
     machinegun: SPRITE_SRC_MACHINEGUN,
     sniper: SPRITE_SRC_SNIPER,
@@ -1871,6 +1936,7 @@ function indexHtml() {
     if (forced && LOADOUTS[forced]) return forced;   // /admin tank override
     // 14- and 20-kill tiers removed for now (Triplet/Quad/Necromancer/Octo are admin-only),
     // except Hunter -> Predator at 20 kills (automatic, no choice).
+    if (score >= PREDATOR_KILLS && loadout7 === 'destroyer') return loadout20 === 'behemoth' ? 'behemoth' : 'firework';   // Destroyer, 20 kills: Firework or Behemoth (Firework if you miss the popup)
     if (score >= PREDATOR_KILLS && loadout7 === 'hunter') return loadout20 === 'quintet' ? 'quintet' : 'predator';  // 20-kill choice; Predator if you miss the popup
     if (score >= PREDATOR_KILLS && loadout7 === 'parallel') return loadout20 === 'octo' ? 'octo' : 'quintet';       // Twin route, Diagonal: Quintet or Octo
     if (score >= PREDATOR_KILLS && (loadout7 === 'triple' || loadout7 === 'quad')) return loadout20 === 'quadtwin' ? 'quadtwin' : 'triplet';  // Twin route, Triple/Quad: Triplet or Quad Twin
@@ -2040,7 +2106,7 @@ function indexHtml() {
     account: null, accountToken: null,   // { username, kills } | null -- signed-in account (cross-room kill total)
     leaderboard: [],         // [{username, kills}] -- public, server-pushed
     upgrades: freshUpgrades(),  // stacks of bonuses earned from kills, reset per sector join
-    spritesByLoadout: { single:{}, dual:{}, twin:{}, machinegun:{}, sniper:{}, gunner:{}, hunter:{}, predator:{}, quintet:{}, quadtwin:{}, overlord:{}, overseer:{}, triple:{}, parallel:{}, omni:{}, triplet:{}, quad:{}, necro:{}, octo:{}, destroyer:{} }, // loadoutId -> colorId -> recolored <canvas>
+    spritesByLoadout: { single:{}, dual:{}, twin:{}, machinegun:{}, sniper:{}, gunner:{}, hunter:{}, predator:{}, quintet:{}, quadtwin:{}, overlord:{}, overseer:{}, triple:{}, parallel:{}, omni:{}, triplet:{}, quad:{}, necro:{}, octo:{}, destroyer:{}, firework:{}, behemoth:{} }, // loadoutId -> colorId -> recolored <canvas>
     remoteSmooth: {},      // peerId -> {x,y,turretAngle} smoothed render position (server ticks slower than 60fps)
     spritesReady: false,
     lastShot:0,
@@ -2263,7 +2329,7 @@ function indexHtml() {
     });
   }
 
-  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', predator:'PREDATOR', quintet:'QUINTET', quadtwin:'QUAD TWIN', overlord:'OVERLORD', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER' };
+  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', predator:'PREDATOR', quintet:'QUINTET', quadtwin:'QUAD TWIN', overlord:'OVERLORD', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER', firework:'FIREWORK', behemoth:'BEHEMOTH' };
   let choiceOptions = ['triple','parallel'];
   let choiceTier = 7;
   function buildLoadoutTiles(){
@@ -2281,7 +2347,7 @@ function indexHtml() {
       const img = document.createElement('img');
       img.src = sprite.toDataURL();
       tile.appendChild(img);
-      if (choiceTier === 1 || choiceTier === 7){   // 3-way menus get a caption -- the three sprites are easy to mix up on a phone
+      if (choiceTier === 1 || choiceTier === 7 || (choiceTier === 20 && state.loadout7 === 'destroyer')){   // 3-way menus get a caption -- the three sprites are easy to mix up on a phone
         tile.classList.add('captioned');
         const cap = document.createElement('span');
         cap.textContent = (LOADOUT_TITLES[loadoutId] || loadoutId).replace(' CANNON','');
@@ -2296,7 +2362,7 @@ function indexHtml() {
   function offerLoadoutChoice(tier){
     if (!state.spritesReady) return;
     choiceTier = tier;
-    choiceOptions = tier === 20 ? (state.loadout7 === 'parallel' ? ['quintet','octo'] : (state.loadout7 === 'hunter' ? ['predator','quintet'] : ['triplet','quadtwin'])) : (tier === 14 ? ['triplet','quad'] : (tier === 1 ? TIER1_TANKS : (state.loadout1 === 'machinegun' ? ['gunner','destroyer'] : state.loadout1 === 'sniper' ? ['overseer','hunter'] : ['triple','quad','parallel'])));
+    choiceOptions = tier === 20 ? (state.loadout7 === 'destroyer' ? ['firework','behemoth'] : state.loadout7 === 'parallel' ? ['quintet','octo'] : (state.loadout7 === 'hunter' ? ['predator','quintet'] : ['triplet','quadtwin'])) : (tier === 14 ? ['triplet','quad'] : (tier === 1 ? TIER1_TANKS : (state.loadout1 === 'machinegun' ? ['gunner','destroyer'] : state.loadout1 === 'sniper' ? ['overseer','hunter'] : ['triple','quad','parallel'])));
     buildLoadoutTiles(); // rebuild so previews reflect the player's current color
     byId('loadoutChoice').classList.add('show');
     clearTimeout(loadoutChoiceTimer);
@@ -2830,7 +2896,7 @@ function indexHtml() {
       const d = msg.data || {};
       if (d.roomId !== state.currentSector) return;
       (d.shots || []).forEach(s=>{
-        spawnBullet(s.id, d.shooterId, d.shooterName, s.x, s.y, s.angle, colorHex(d.color), d.speed, d.damage, d.square, d.team, d.pierce, s.r);
+        spawnBullet(s.id, d.shooterId, d.shooterName, s.x, s.y, s.angle, colorHex(d.color), d.speed, d.damage, d.square, d.team, d.pierce, s.r, d.fw);
       });
     });
 
@@ -2850,7 +2916,7 @@ function indexHtml() {
         if (state.score === LOADOUT7_KILLS){
           offerLoadoutChoice(7);
         }
-        if (state.score === PREDATOR_KILLS && ['hunter','parallel','triple','quad'].indexOf(state.loadout7) >= 0){
+        if (state.score === PREDATOR_KILLS && ['hunter','parallel','triple','quad','destroyer'].indexOf(state.loadout7) >= 0){
           offerLoadoutChoice(20);   // Hunter: Predator/Quintet, Diagonal: Quintet/Octo, Triple or Quad: Triplet/Quad Twin
         }
         if (state.score === PREDATOR_KILLS && state.loadout7 === 'overseer'){
@@ -2883,7 +2949,7 @@ function indexHtml() {
     });
   }
 
-  function spawnBullet(id, shooterId, shooterName, x, y, angle, color, speed, damage, square, shooterTeam, pierce, radius){
+  function spawnBullet(id, shooterId, shooterName, x, y, angle, color, speed, damage, square, shooterTeam, pierce, radius, fw){
     if (state.bullets.some(b=>b.id===id)) return;
     const spd = speed || BULLET_SPEED;
     state.bullets.push({
@@ -2892,8 +2958,21 @@ function indexHtml() {
       color, born: performance.now(), damage: damage || DAMAGE,
       square: !!square, angle,
       pierce: pierce || 0, hitPeers: null,   // penetration: extra tanks this bullet can pass through
-      r: radius || BULLET_R
+      r: radius || BULLET_R,
+      fw: !!fw, life: fw ? FIREWORK_FUSE : BULLET_LIFE
     });
+  }
+  // Firework burst: FIREWORK_FRAGMENTS normal-size bullets in an even ring.
+  // Every client runs this for the ball it sees; ids are deterministic so
+  // spawnBullet() de-dupes and nothing extra needs to be sent over the wire.
+  function explodeFirework(b){
+    const n = FIREWORK_FRAGMENTS, off = b.angle || 0;
+    const spd = Math.hypot(b.vx, b.vy) || BULLET_SPEED;
+    for (let i = 0; i < n; i++){
+      const a = off + i * (Math.PI * 2 / n);
+      spawnBullet(b.id + '-f' + i, b.shooterId, b.shooterName, b.x, b.y, a, b.color, spd, (b.damage || DAMAGE) * 0.5, false, b.shooterTeam, 0, BULLET_R);
+    }
+    spawnSpark(b.x, b.y, b.color, true);
   }
   function spawnSpark(x,y,color,big){
     state.sparks.push({x,y,color,born:performance.now(), big: !!big});
@@ -3189,7 +3268,7 @@ function indexHtml() {
     // rather than along the barrel's own diagonal angle.
     function shotAngleFor(barrel, tipAngle){
       if (barrel.aim !== undefined) return baseRot + barrel.aim;   // pair fires straight along its own axis
-      if (loadoutId === 'triple' || loadoutId === 'quintet' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo' || loadoutId === 'destroyer') return tipAngle;
+      if (loadoutId === 'triple' || loadoutId === 'quintet' || loadoutId === 'omni' || loadoutId === 'quad' || loadoutId === 'octo' || loadoutId === 'destroyer' || loadoutId === 'firework') return tipAngle;
       if (loadoutId === 'parallel' || loadoutId === 'necro'){
         let diff = tipAngle - state.turretAngle;
         while (diff > Math.PI) diff -= Math.PI*2;
@@ -3209,17 +3288,18 @@ function indexHtml() {
       return { id, x: bx, y: by, angle: shotAngleFor(barrel, tipAngle) + jitter };
     });
 
-    const pierce = effectivePierce();
+    const isFw = loadoutId === 'firework';
+    const pierce = isFw ? 0 : effectivePierce();
     const bulletR = def.bulletRadius ? def.bulletRadius * scale : BULLET_R;
     shots.forEach(s=>{ s.r = bulletR; });
     shots.forEach(s=>{
-      spawnBullet(s.id, state.myPeerId, state.name, s.x, s.y, s.angle, state.color.hex, spd, dmg, loadoutId === 'necro', state.team, pierce, s.r);
+      spawnBullet(s.id, state.myPeerId, state.name, s.x, s.y, s.angle, state.color.hex, spd, dmg, loadoutId === 'necro', state.team, pierce, s.r, isFw);
     });
     if (state.room){
       state.room.emit('shoot', {
         shots, shooterId: state.myPeerId, shooterName: state.name,
         color: state.color.id, team: state.team, roomId: state.currentSector, speed: spd, damage: dmg,
-        square: loadoutId === 'necro', pierce
+        square: loadoutId === 'necro', pierce, fw: isFw
       });
     }
   }
@@ -3611,12 +3691,14 @@ function indexHtml() {
     // bullets
     const now = performance.now();
     const allPeers = peersIn(state.currentSector);
+    const fwQueue = [];
+    const fwPop = (b)=>{ if (b.fw) fwQueue.push(b); return false; };
     state.bullets = state.bullets.filter(b=>{
-      if (now - b.born > BULLET_LIFE) return false;
+      if (now - b.born > (b.life || BULLET_LIFE)) return fwPop(b);
       b.x += b.vx * dt; b.y += b.vy * dt;
-      if (b.x < 0 || b.x > ARENA_W || b.y < 0 || b.y > ARENA_H){ spawnSpark(b.x,b.y,b.color); return false; }
+      if (b.x < 0 || b.x > ARENA_W || b.y < 0 || b.y > ARENA_H){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
       for (const o of OBSTACLES){
-        if (rectCircleCollide(b.x,b.y,b.r||BULLET_R,o)){ spawnSpark(b.x,b.y,b.color); return false; }
+        if (rectCircleCollide(b.x,b.y,b.r||BULLET_R,o)){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
       }
       // drones are immune to bullets -- bullets pass straight through them
       // visual stop against any tank in the sector (unless this bullet still
@@ -3636,7 +3718,7 @@ function indexHtml() {
           if (p.isMe && state.alive && b.shooterId !== state.myPeerId){
             applyDamage(b.shooterId, b.shooterName, b.damage);
           }
-          if ((b.pierce||0) <= 0) return false;
+          if ((b.pierce||0) <= 0) return fwPop(b);
           b.pierce -= 1;
           if (!b.hitPeers) b.hitPeers = new Set();
           b.hitPeers.add(p.peer);
@@ -3645,6 +3727,7 @@ function indexHtml() {
       }
       return true;
     });
+    fwQueue.forEach(explodeFirework);   // spawn after the filter so the fragments aren't overwritten
 
     if (state.drones.some(d=>d.hp <= 0)){
       state.drones.forEach(d=>{ if (d.hp <= 0) spawnSpark(d.x, d.y, state.color.hex, true); });
@@ -3910,6 +3993,7 @@ function indexHtml() {
       } else {
         ctx.beginPath(); ctx.arc(b.x,b.y,br,0,Math.PI*2); ctx.fill();
       }
+      if (b.fw){ ctx.strokeStyle = '#ffffff'; ctx.globalAlpha = 0.8; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(b.x,b.y,br,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha = 1; }
       ctx.strokeStyle = b.color; ctx.globalAlpha = 0.35; ctx.lineWidth=2;
       ctx.beginPath(); ctx.moveTo(b.x - b.vx*0.02, b.y - b.vy*0.02); ctx.lineTo(b.x,b.y); ctx.stroke();
       ctx.globalAlpha = 1;
@@ -4404,7 +4488,7 @@ function indexHtml() {
   // ---------------------------------------------------------------
   const ADMIN_TANKS = [
     ['single','SINGLE'], ['twin','TWIN'], ['machinegun','MACHINE GUN'], ['sniper','SNIPER'], ['gunner','GUNNER'], ['dual','OLD TWIN'], ['triple','TRIPLE'], ['parallel','DIAGONAL'], ['omni','OMNI'],
-    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['overseer','OVERSEER'], ['hunter','HUNTER'], ['predator','PREDATOR'], ['quintet','QUINTET'], ['quadtwin','QUAD TWIN'], ['overlord','OVERLORD'],
+    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['firework','FIREWORK'], ['behemoth','BEHEMOTH'], ['overseer','OVERSEER'], ['hunter','HUNTER'], ['predator','PREDATOR'], ['quintet','QUINTET'], ['quadtwin','QUAD TWIN'], ['overlord','OVERLORD'],
   ];
   function openCmd(prefill){
     if (!state.room) return;
