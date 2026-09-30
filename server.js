@@ -48,7 +48,7 @@ const peers = new Map();
 // roomMeta {name,map,cap}). Clamp whatever clients send so a bad client
 // can't push odd room ids or oversized values to everyone else.
 const ROOM_ID_RE = /^(A|B|H-[A-Z0-9]{5})$/;
-const KNOWN_MAPS = new Set(['crossfire', 'flats', 'fortress', 'switchback', 'grid', 'cross']);
+const KNOWN_MAPS = new Set(['crossfire', 'flats', 'fortress', 'bunkers', 'grid', 'cross']);
 // Hosted-room game modes. 'ffa' (default) is every-tank-for-itself, exactly
 // like Room 1 / Room 2. 'teams' splits players into two sides (no friendly
 // fire, team score = sum of member kills). 'ctf' adds a flag each side must
@@ -988,7 +988,7 @@ function indexHtml() {
   @media (max-width:420px) { .map-grid { grid-template-columns:repeat(2,1fr); } }
   .map-card { display:flex; flex-direction:column; align-items:center; gap:6px; padding:8px 6px; background:var(--panel-2); border:1px solid var(--line-bright); color:var(--ink-dim); text-align:center; }
   .map-card.picked { border-color:var(--green); color:var(--ink); box-shadow:0 0 0 1px var(--green); }
-  .map-card canvas { width:60px; height:85px; display:block; border:1px solid var(--line); }
+  .map-card canvas { width:60px; height:60px; display:block; border:1px solid var(--line); }
   .map-card .mn { font-size:10px; letter-spacing:0.06em; font-weight:700; }
   .map-card .md { font-size:10px; line-height:1.3; }
 
@@ -1420,7 +1420,7 @@ function indexHtml() {
   // ---------------------------------------------------------------
   // Config
   // ---------------------------------------------------------------
-  const ARENA_W = 1190, ARENA_H = 1680;  // A3-proportioned (1 : 1.414) map
+  const ARENA_W = 1500, ARENA_H = 1500;  // 50 x 50 grid squares (GRID_SIZE 30)
   const ZOOM = 1.3;                      // world units -> CSS px; >1 zooms in a bit
   const FOV_MULT = 1.5;                  // Sniper & Hunter see 1.5x more of the map (width and height)
   let curZoom = ZOOM, lastZoomT = 0, viewCssW = 620 * ZOOM, viewCssH = 875 * ZOOM;
@@ -1976,53 +1976,89 @@ function indexHtml() {
   function capOf(sector){ if (SECTOR_CAP[sector]) return SECTOR_CAP[sector]; const m = getRoomMeta(sector); return m ? m.cap : 4; }
 
   const CLASSIC_OBSTACLES = [
-    // central diamond cluster
-    {x:385, y:574,  w:84, h:84},
-    {x:721, y:574,  w:84, h:84},
-    {x:385, y:1022, w:84, h:84},
-    {x:721, y:1022, w:84, h:84},
-    // top/bottom mid blocks
-    {x:511, y:210,  w:168, h:56},
-    {x:511, y:1414, w:168, h:56},
-    // left/right mid pillars
-    {x:126,  y:770, w:56, h:140},
-    {x:1008, y:770, w:56, h:140},
-    // scattered corner-quarter pillars
-    {x:252, y:308,  w:70, h:70},
-    {x:868, y:308,  w:70, h:70},
-    {x:252, y:1302, w:70, h:70},
-    {x:868, y:1302, w:70, h:70},
-    // corner walls
-    {x:126, y:84,   w:182, h:42},
-    {x:882, y:84,   w:182, h:42},
-    {x:126, y:1554, w:182, h:42},
-    {x:882, y:1554, w:182, h:42},
+      {x:870,y:1000,w:130,h:40},{x:960,y:850,w:40,h:190},{x:240,y:160,w:40,h:120},
+      {x:240,y:200,w:100,h:40},{x:1200,y:243,w:140,h:40},{x:1250,y:190,w:40,h:93},
+      {x:160,y:1090,w:170,h:40},{x:290,y:1090,w:40,h:140},{x:760,y:270,w:110,h:40},
+      {x:795,y:270,w:40,h:93},{x:450,y:890,w:180,h:40},{x:450,y:890,w:40,h:150},
+      {x:1250,y:1180,w:160,h:40},{x:1310,y:1180,w:40,h:106},{x:1190,y:820,w:40,h:170},
+      {x:1190,y:885,w:106,h:40},{x:450,y:570,w:160,h:40},{x:510,y:570,w:40,h:100},
+      {x:960,y:1350,w:180,h:40},{x:960,y:1240,w:40,h:150},{x:230,y:720,w:40,h:160},
+      {x:230,y:780,w:73,h:40},{x:1100,y:530,w:190,h:40},{x:1250,y:530,w:40,h:120},
+      {x:500,y:200,w:40,h:170},{x:500,y:265,w:113,h:40},{x:450,y:1310,w:170,h:40},
+      {x:580,y:1230,w:40,h:120},{x:760,y:540,w:160,h:40},{x:760,y:540,w:40,h:190},
+      {x:950,y:70,w:110,h:40},{x:985,y:70,w:40,h:80},{x:180,y:550,w:160,h:40},
+      {x:300,y:410,w:40,h:180},{x:760,y:1150,w:40,h:120},{x:760,y:1190,w:80,h:40},
+      {x:1013,y:270,w:40,h:120},{x:980,y:310,w:73,h:40}
   ];
 
   // Selectable maps (same arena size; every map keeps the 8 SPAWNS clear).
-  const GRID_PILLARS = [];
-  [175,375,575,775,975].forEach(x=>[220,420,620,820,1020,1220,1420].forEach(y=>GRID_PILLARS.push({x,y,w:40,h:40})));
+  // Obstacles are plain rectangles; L and T shapes are built from two overlapping bars.
+  // Pieces are scattered across the whole arena (not clustered in the middle).
+  const GRID_PILLARS = [
+      {x:684,y:440,w:36,h:110},{x:640,y:477,w:80,h:36},{x:1060,y:1300,w:50,h:50},
+      {x:110,y:1110,w:130,h:36},{x:110,y:1110,w:36,h:140},{x:1020,y:70,w:36,h:100},
+      {x:1020,y:102,w:66,h:36},{x:1290,y:450,w:60,h:60},{x:140,y:280,w:50,h:50},
+      {x:560,y:820,w:150,h:36},{x:674,y:820,w:36,h:150},{x:480,y:1240,w:60,h:60},
+      {x:530,y:190,w:110,h:36},{x:567,y:160,w:36,h:66},{x:1120,y:730,w:36,h:120},
+      {x:1120,y:772,w:66,h:36},{x:250,y:740,w:100,h:36},{x:250,y:740,w:36,h:140},
+      {x:880,y:540,w:80,h:80},{x:1340,y:1000,w:80,h:80},{x:640,y:1157,w:120,h:36},
+      {x:682,y:1080,w:36,h:113},{x:280,y:554,w:100,h:36},{x:280,y:480,w:36,h:110},
+      {x:360,y:1010,w:60,h:60},{x:1060,y:1077,w:100,h:36},{x:1092,y:1020,w:36,h:93},
+      {x:310,y:70,w:70,h:70},{x:900,y:920,w:50,h:50},{x:860,y:1230,w:70,h:70},
+      {x:910,y:340,w:36,h:100},{x:910,y:372,w:80,h:36},{x:70,y:550,w:70,h:70},
+      {x:1310,y:270,w:70,h:70},{x:330,y:250,w:100,h:36},{x:362,y:250,w:36,h:100},
+      {x:1090,y:380,w:36,h:120},{x:1090,y:422,w:73,h:36},{x:760,y:290,w:50,h:50},
+      {x:320,y:1360,w:60,h:60},{x:1270,y:1240,w:50,h:50},{x:860,y:730,w:50,h:50},
+      {x:80,y:930,w:70,h:70},{x:520,y:650,w:70,h:70},{x:1240,y:80,w:50,h:50},
+      {x:490,y:470,w:50,h:50},{x:690,y:660,w:50,h:50}
+  ];
   const MAPS = {
-    crossfire: { name:'CROSSFIRE RUINS', desc:'Classic scattered cover', obstacles: CLASSIC_OBSTACLES },
-    flats: { name:'OPEN FLATS', desc:'Wide open, sparse cover', obstacles:[
-      {x:270,y:520,w:60,h:60},{x:860,y:520,w:60,h:60},{x:565,y:810,w:60,h:60},
-      {x:270,y:1100,w:60,h:60},{x:860,y:1100,w:60,h:60},{x:565,y:300,w:60,h:60},{x:565,y:1320,w:60,h:60} ] },
+    crossfire: { name:'CROSSFIRE RUINS', desc:'L and T walls everywhere', obstacles: CLASSIC_OBSTACLES },
+    flats: { name:'OPEN FLATS', desc:'Fewer, bigger L and T walls', obstacles:[
+      {x:300,y:1096,w:210,h:44},{x:466,y:960,w:44,h:180},{x:1240,y:290,w:190,h:44},
+      {x:1240,y:290,w:44,h:190},{x:439,y:100,w:44,h:260},{x:310,y:208,w:173,h:44},
+      {x:990,y:910,w:190,h:44},{x:1063,y:910,w:44,h:153},{x:450,y:716,w:220,h:44},
+      {x:626,y:580,w:44,h:180},{x:850,y:506,w:200,h:44},{x:1006,y:290,w:44,h:260},
+      {x:1000,y:1339,w:230,h:44},{x:1093,y:1250,w:44,h:133},{x:776,y:1050,w:44,h:180},
+      {x:680,y:1118,w:140,h:44}
+    ] },
     fortress: { name:'FORTRESS', desc:'Blue kill-zone bunker in the middle', obstacles:[
-      {x:120,y:132,w:950,h:46}, {x:120,y:132,w:46,h:553}, {x:1024,y:132,w:46,h:553},
-      {x:120,y:1502,w:950,h:46}, {x:120,y:995,w:46,h:553}, {x:1024,y:995,w:46,h:553},
-      {x:511,y:756,w:168,h:168} ],
-      hazards:[ {x:440,y:685,w:310,h:310} ] },
-    switchback: { name:'SWITCHBACK', desc:'Zig-zag lanes, tight chases', obstacles:[
-      {x:0,y:360,w:760,h:36},{x:430,y:560,w:760,h:36},{x:0,y:1084,w:760,h:36},{x:430,y:1284,w:760,h:36},{x:565,y:800,w:60,h:80} ] },
-    grid: { name:'PILLAR GRID', desc:'35 pillars, lots of angles', obstacles: GRID_PILLARS },
-    cross: { name:'THE CROSS', desc:'Four quadrants, one hub', obstacles:[
-      {x:180,y:822,w:270,h:36},{x:740,y:822,w:270,h:36},{x:577,y:380,w:36,h:270},{x:577,y:1030,w:36,h:270},
-      {x:250,y:330,w:110,h:36},{x:830,y:330,w:110,h:36},{x:250,y:1314,w:110,h:36},{x:830,y:1314,w:110,h:36} ] },
+      {x:250,y:250,w:1000,h:46}, {x:250,y:250,w:46,h:400}, {x:1204,y:250,w:46,h:400},
+      {x:250,y:1204,w:1000,h:46}, {x:250,y:850,w:46,h:400}, {x:1204,y:850,w:46,h:400},
+      {x:666,y:666,w:168,h:168} ],
+      hazards:[ {x:595,y:595,w:310,h:310} ] },
+    bunkers: { name:'BUNKERS', desc:'Large L and T nests, spread out', obstacles:[
+      {x:680,y:1040,w:170,h:40},{x:680,y:900,w:40,h:180},{x:1090,y:240,w:170,h:40},
+      {x:1155,y:240,w:40,h:120},{x:330,y:210,w:170,h:40},{x:460,y:210,w:40,h:180},
+      {x:70,y:1100,w:240,h:40},{x:70,y:930,w:40,h:210},{x:1100,y:1170,w:150,h:40},
+      {x:1210,y:1170,w:40,h:170},{x:630,y:570,w:210,h:40},{x:800,y:570,w:40,h:150},
+      {x:1110,y:800,w:170,h:40},{x:1175,y:800,w:40,h:153},{x:270,y:520,w:40,h:180},
+      {x:270,y:590,w:106,h:40},{x:490,y:1200,w:170,h:40},{x:555,y:1200,w:40,h:106},
+      {x:780,y:240,w:170,h:40},{x:780,y:240,w:40,h:170},{x:1070,y:490,w:210,h:40},
+      {x:1155,y:490,w:40,h:160},{x:220,y:1280,w:40,h:150},{x:220,y:1335,w:146,h:40},
+      {x:520,y:870,w:40,h:210},{x:460,y:955,w:100,h:40}
+    ] },
+    grid: { name:'TETRIS YARD', desc:'Dense L, T and block clutter', obstacles: GRID_PILLARS },
+    cross: { name:'RUBBLE', desc:'Thin broken L and T walls', obstacles:[
+      {x:1140,y:274,w:150,h:36},{x:1140,y:170,w:36,h:140},{x:280,y:1160,w:36,h:120},
+      {x:210,y:1202,w:106,h:36},{x:1170,y:1060,w:190,h:36},{x:1324,y:1060,w:36,h:210},
+      {x:200,y:364,w:140,h:36},{x:200,y:220,w:36,h:180},{x:660,y:760,w:36,h:180},
+      {x:660,y:832,w:86,h:36},{x:1050,y:757,w:210,h:36},{x:1137,y:680,w:36,h:113},
+      {x:280,y:790,w:120,h:36},{x:364,y:790,w:36,h:130},{x:510,y:454,w:140,h:36},
+      {x:510,y:360,w:36,h:130},{x:790,y:1080,w:170,h:36},{x:857,y:1080,w:36,h:86},
+      {x:860,y:300,w:36,h:190},{x:860,y:377,w:86,h:36},{x:570,y:1150,w:36,h:180},
+      {x:500,y:1222,w:106,h:36},{x:1250,y:430,w:160,h:36},{x:1312,y:430,w:36,h:140},
+      {x:230,y:530,w:170,h:36},{x:230,y:530,w:36,h:140},{x:490,y:150,w:130,h:36},
+      {x:537,y:100,w:36,h:86},{x:880,y:1300,w:130,h:36},{x:974,y:1300,w:36,h:120},
+      {x:860,y:610,w:36,h:140},{x:860,y:662,w:80,h:36},{x:900,y:134,w:130,h:36},
+      {x:947,y:70,w:36,h:100}
+    ] },
   };
+
   const HOST_CAPS = [2,4,6,8,10];
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const hostDraft = { map:'crossfire', cap:4, mode:'ffa' };
-  const MAP_ORDER = ['crossfire','flats','fortress','switchback','grid','cross'];
+  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross'];
   let OBSTACLES = CLASSIC_OBSTACLES;
   let HAZARDS = [];              // active map's kill-zones (fortress' blue bunker floor), set by applyMap()
   const HAZARD_MS = 3000;        // time you can stand in a hazard zone before it kills you
@@ -2042,13 +2078,13 @@ function indexHtml() {
   const MIN_HOST_START_PLAYERS = 2; // hosted rooms need this many joined before the host can hit START
 
   const SPAWNS = [
-    {x:84,y:84},{x:1106,y:84},{x:84,y:1596},{x:1106,y:1596},
-    {x:595,y:98},{x:595,y:1582},{x:84,y:840},{x:1106,y:840}
+    {x:84,y:84},{x:1416,y:84},{x:84,y:1416},{x:1416,y:1416},
+    {x:750,y:98},{x:750,y:1402},{x:84,y:750},{x:1416,y:750}
   ];
 
   // CTF flag bases -- reuse two of the guaranteed-clear SPAWNS points at
   // opposite ends of the map so flags never land inside an obstacle.
-  const FLAG_BASES = { red: {x:595,y:98}, blue: {x:595,y:1582} };
+  const FLAG_BASES = { red: {x:750,y:98}, blue: {x:750,y:1402} };
   const FLAG_R = TANK_R + 24;       // pickup / capture radius
   const CAPTURES_TO_WIN = 3;        // just triggers an announcement -- hosted rooms stay untimed & playable after
 
@@ -4509,7 +4545,7 @@ function indexHtml() {
     MAP_ORDER.forEach(id=>{
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'map-card'; b.dataset.map = id;
-      const cv = document.createElement('canvas'); cv.width = 120; cv.height = 170;
+      const cv = document.createElement('canvas'); cv.width = 120; cv.height = 120;
       const n = document.createElement('span'); n.className = 'mn'; n.textContent = MAPS[id].name;
       const d = document.createElement('span'); d.className = 'md'; d.textContent = MAPS[id].desc;
       b.appendChild(cv); b.appendChild(n); b.appendChild(d);
