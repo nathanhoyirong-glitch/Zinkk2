@@ -1389,12 +1389,12 @@ function indexHtml() {
     </div>
 
     <div class="settings-row">
-      <div class="settings-label"><span>MOVEMENT SPEED</span><span id="moveMultVal">100%</span></div>
-      <input type="range" id="moveMultSlider" min="50" max="200" step="5" value="100" />
+      <div class="settings-label"><span>MOVEMENT SPEED</span><span id="moveMultVal">75%</span></div>
+      <input type="range" id="moveMultSlider" min="50" max="200" step="5" value="75" />
     </div>
     <div class="settings-row">
-      <div class="settings-label"><span>BULLET SPEED</span><span id="bulletMultVal">100%</span></div>
-      <input type="range" id="bulletMultSlider" min="50" max="200" step="5" value="100" />
+      <div class="settings-label"><span>BULLET SPEED</span><span id="bulletMultVal">75%</span></div>
+      <input type="range" id="bulletMultSlider" min="50" max="200" step="5" value="75" />
     </div>
     <div class="settings-row">
       <div class="settings-label"><span>STICK SENSITIVITY</span><span id="sensMultVal">100%</span></div>
@@ -2057,14 +2057,18 @@ function indexHtml() {
   // ---------------------------------------------------------------
   const SETTINGS_KEY = 'tankArenaSettings';
   function loadSettings(){
-    const defaults = { moveMult: 1, bulletMult: 1, sensMult: 1, theme: 'light' };   // light (white) mode is the default
+    const defaults = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light' };   // light (white) mode is the default
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       if (!raw) return defaults;
       const parsed = JSON.parse(raw);
       return {
-        moveMult: clampSetting(parsed.moveMult, 0.5, 2, 1),
-        bulletMult: clampSetting(parsed.bulletMult, 0.5, 2, 1),
+        // movement + bullet speed default to 75% and are locked for normal players; only admins can change them
+        moveMult: parsed.moveChosen ? clampSetting(parsed.moveMult, 0.5, 2, 0.75) : 0.75,
+        moveChosen: !!parsed.moveChosen,
+        // default is 75%; only keep a saved value if the player moved the slider themselves
+        bulletMult: parsed.bulletChosen ? clampSetting(parsed.bulletMult, 0.5, 2, 0.75) : 0.75,
+        bulletChosen: !!parsed.bulletChosen,
         sensMult: clampSetting(parsed.sensMult, 0.5, 2, 1),
         // only keep a saved DARK theme if the player picked it themselves; everyone else gets light
         theme: (parsed.themeChosen && parsed.theme !== 'light') ? 'dark' : 'light',
@@ -2149,9 +2153,11 @@ function indexHtml() {
   }
   // HP is never shown/stored with more than 1 decimal place
   function hp1(v){ return Math.round((v||0) * 10) / 10; }
+  // Movement + bullet speed are fixed at 75% for everyone except admins (who can change them in settings)
+  function speedMult(key){ return state.adminUnlocked ? state.settings[key] : 0.75; }
   function effectiveMaxHp(){ return MAX_HP + state.upgrades.lvl.maxhp * 7.5; }
-  function effectiveMoveSpeed(){ return TANK_SPEED * state.settings.moveMult * (1 + state.upgrades.lvl.movespeed * 0.035); }
-  function effectiveBulletSpeed(){ return BULLET_SPEED * state.settings.bulletMult * (1 + state.upgrades.lvl.bulletspeed * 0.045); }
+  function effectiveMoveSpeed(){ return TANK_SPEED * speedMult('moveMult') * (1 + state.upgrades.lvl.movespeed * 0.035); }
+  function effectiveBulletSpeed(){ return BULLET_SPEED * speedMult('bulletMult') * (1 + state.upgrades.lvl.bulletspeed * 0.045); }
   function effectiveFireCooldown(){ return FIRE_COOLDOWN * Math.pow(0.965, state.upgrades.lvl.reload); }
   function effectiveDamage(){ return DAMAGE + state.upgrades.lvl.bulletdmg * 1.5; }
   function effectiveBodyDamageBonus(){ return state.upgrades.lvl.bodydmg * 2; }
@@ -4282,11 +4288,14 @@ function indexHtml() {
 
   // ---- settings ----
   function refreshSettingsUI(){
-    byId('moveMultSlider').value = Math.round(state.settings.moveMult * 100);
-    byId('bulletMultSlider').value = Math.round(state.settings.bulletMult * 100);
+    const adm = !!state.adminUnlocked;
+    byId('moveMultSlider').disabled = !adm;
+    byId('bulletMultSlider').disabled = !adm;
+    byId('moveMultSlider').value = Math.round(speedMult('moveMult') * 100);
+    byId('bulletMultSlider').value = Math.round(speedMult('bulletMult') * 100);
     byId('sensMultSlider').value = Math.round(state.settings.sensMult * 100);
-    byId('moveMultVal').textContent = Math.round(state.settings.moveMult * 100) + '%';
-    byId('bulletMultVal').textContent = Math.round(state.settings.bulletMult * 100) + '%';
+    byId('moveMultVal').textContent = Math.round(speedMult('moveMult') * 100) + '%' + (adm ? '' : ' \uD83D\uDD12');
+    byId('bulletMultVal').textContent = Math.round(speedMult('bulletMult') * 100) + '%' + (adm ? '' : ' \uD83D\uDD12');
     byId('sensMultVal').textContent = Math.round(state.settings.sensMult * 100) + '%';
     byId('themeDarkBtn').classList.toggle('active', state.settings.theme !== 'light');
     byId('themeLightBtn').classList.toggle('active', state.settings.theme === 'light');
@@ -4305,12 +4314,16 @@ function indexHtml() {
     if (e.target.id === 'settingsBackdrop') closeSettings();
   });
   byId('moveMultSlider').addEventListener('input', (e)=>{
+    if (!state.adminUnlocked){ refreshSettingsUI(); return; }
     state.settings.moveMult = Number(e.target.value) / 100;
+    state.settings.moveChosen = true;
     byId('moveMultVal').textContent = e.target.value + '%';
     saveSettings();
   });
   byId('bulletMultSlider').addEventListener('input', (e)=>{
+    if (!state.adminUnlocked){ refreshSettingsUI(); return; }
     state.settings.bulletMult = Number(e.target.value) / 100;
+    state.settings.bulletChosen = true;
     byId('bulletMultVal').textContent = e.target.value + '%';
     saveSettings();
   });
@@ -4334,7 +4347,7 @@ function indexHtml() {
     refreshSettingsUI();
   });
   byId('settingsResetBtn').addEventListener('click', ()=>{
-    state.settings = { moveMult: 1, bulletMult: 1, sensMult: 1, theme: 'light' };
+    state.settings = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light' };
     applyTheme();
     invalidateBackground();
     saveSettings();
