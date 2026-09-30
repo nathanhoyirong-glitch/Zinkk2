@@ -2899,7 +2899,16 @@ function indexHtml() {
       if (i >= 0){ spawnSpark(state.drones[i].x, state.drones[i].y, state.color.hex); state.drones.splice(i,1); }
     });
 
-    state.unsubShoot = state.room.on('shoot', (msg)=>{
+    const unsubHit = state.room.on('bulletHit', (msg)=>{
+      if (msg.sameTab) return;
+      const d = msg.data || {};
+      if (d.roomId !== state.currentSector || d.victimId !== state.myPeerId) return;
+      if (d.shooterId === state.myPeerId) return;
+      const sp = peersIn(state.currentSector).find(p=>p.peer === d.shooterId);
+      if (sp && state.team && sp.presence.team && sp.presence.team === state.team) return;   // no friendly fire
+      claimBulletHit(d.bulletId, d.shooterId, d.shooterName, Number(d.damage) || DAMAGE);
+    });
+    const unsubShootOnly = state.room.on('shoot', (msg)=>{
       if (msg.sameTab) return;
       const d = msg.data || {};
       if (d.roomId !== state.currentSector) return;
@@ -2907,6 +2916,7 @@ function indexHtml() {
         spawnBullet(s.id, d.shooterId, d.shooterName, s.x, s.y, s.angle, colorHex(d.color), d.speed, d.damage, d.square, d.team, d.pierce, s.r, d.fw);
       });
     });
+    state.unsubShoot = ()=>{ unsubShootOnly(); unsubHit(); };
 
     state.unsubKill = state.room.on('kill', (msg)=>{
       const d = msg.data || {};
@@ -3740,7 +3750,15 @@ function indexHtml() {
           if (hit){
             spawnSpark(b.x,b.y,b.color);
             if (p.isMe && state.alive && b.shooterId !== state.myPeerId){
-              applyDamage(b.shooterId, b.shooterName, b.damage);
+              claimBulletHit(b.id, b.shooterId, b.shooterName, b.damage);
+            } else if (!p.isMe && b.shooterId === state.myPeerId && state.room){
+              // I fired this and it reached them on MY screen -- tell them, so
+              // the hit still counts if their own copy of the bullet (which
+              // arrives late) would have missed because of lag.
+              state.room.emit('bulletHit', {
+                roomId: state.currentSector, bulletId: b.id, victimId: p.peer,
+                shooterId: state.myPeerId, shooterName: state.name, damage: b.damage
+              });
             }
             if ((b.pierce||0) <= 0) return fwPop(b);
             b.pierce -= 1;
@@ -3840,6 +3858,19 @@ function indexHtml() {
     hud.classList.add('low');
   }
 
+  // A bullet can be reported as a hit by BOTH sides (my own copy touching me,
+  // and the shooter telling me theirs touched me). Count each bullet once.
+  const appliedBulletHits = new Map();   // bulletId -> time
+  function claimBulletHit(bulletId, shooterId, shooterName, dmg){
+    if (!state.alive) return;
+    if (appliedBulletHits.has(bulletId)) return;
+    appliedBulletHits.set(bulletId, performance.now());
+    if (appliedBulletHits.size > 400){
+      const cutoff = performance.now() - 10000;
+      for (const [k,t] of appliedBulletHits) if (t < cutoff) appliedBulletHits.delete(k);
+    }
+    applyDamage(shooterId, shooterName, dmg);
+  }
   function applyDamage(shooterId, shooterName, dmg){
     state.hp = hp1(Math.max(0, state.hp - (dmg || DAMAGE)));
     byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
