@@ -576,6 +576,12 @@ wss.on('connection', (ws, req) => {
 });
 
 // Lightweight endpoint for keep-alive pings (does not touch any game state).
+// Lobby / waiting-room music (looped by the client while in the lobby or a hosted room's pre-start panel).
+app.get('/lobby-music.mp3', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(__dirname, 'lobby-music.mp3'), (err) => { if (err && !res.headersSent) res.status(404).end(); });
+});
+
 app.get('/healthz', (req, res) => res.type('text/plain').send('ok'));
 
 const PORT = process.env.PORT || 3000;

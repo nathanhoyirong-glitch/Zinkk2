@@ -544,6 +544,9 @@
     </div>
   </section>
 
+  <audio id="lobbyMusic" src="lobby-music.mp3" loop preload="auto"></audio>
+  <button id="musicToggle" class="btn-ghost" aria-label="Toggle lobby music" style="position:fixed;right:14px;bottom:14px;z-index:60;display:none;">&#128266; MUSIC</button>
+
   <!-- ===================== SCREEN 3: GAME ===================== -->
   <section id="screen-game" class="screen">
     <div class="arena-wrap">
@@ -1784,7 +1787,42 @@
   function switchScreen(id){
     document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
     byId(id).classList.add('active');
+    syncLobbyMusic();
   }
+
+  // ---------------------------------------------------------------
+  // Lobby / waiting-room music: plays on the lobby screen and in a hosted
+  // room's pre-start waiting panel, stops when the match begins.
+  // ---------------------------------------------------------------
+  const lobbyMusic = byId('lobbyMusic');
+  const musicToggle = byId('musicToggle');
+  let musicMuted = false;
+  try { musicMuted = localStorage.getItem('lobbyMusicMuted') === '1'; } catch(e){}
+  lobbyMusic.volume = 0.5;
+  function lobbyMusicWanted(){
+    const lobbyOn = !!document.querySelector('#screen-lobby.active');
+    return lobbyOn || !!(typeof state !== 'undefined' && state.waitingToStart);
+  }
+  function syncLobbyMusic(){
+    const want = lobbyMusicWanted();
+    musicToggle.style.display = want ? 'block' : 'none';
+    musicToggle.innerHTML = musicMuted ? '&#128264; MUSIC OFF' : '&#128266; MUSIC';
+    if (want && !musicMuted){
+      const p = lobbyMusic.play();
+      if (p && p.catch) p.catch(()=>{ /* autoplay blocked -- retried on first tap/key below */ });
+    } else {
+      lobbyMusic.pause();
+    }
+  }
+  musicToggle.addEventListener('click', ()=>{
+    musicMuted = !musicMuted;
+    try { localStorage.setItem('lobbyMusicMuted', musicMuted ? '1' : '0'); } catch(e){}
+    syncLobbyMusic();
+  });
+  ['pointerdown','keydown'].forEach(ev=>document.addEventListener(ev, function once(){
+    syncLobbyMusic();
+    if (!lobbyMusic.paused) document.removeEventListener(ev, once);
+  }));
 
   // ---------------------------------------------------------------
   // Capability init
@@ -2198,9 +2236,11 @@
   function openWaitPanel(){
     byId('waitBackdrop').classList.add('show');
     renderWaitPanel();
+    syncLobbyMusic();
   }
   function closeWaitPanel(){
     byId('waitBackdrop').classList.remove('show');
+    syncLobbyMusic();
   }
   function renderWaitPanel(){
     if (!state.waitingToStart || !state.currentSector) return;
