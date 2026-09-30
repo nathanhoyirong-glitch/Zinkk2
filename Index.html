@@ -809,7 +809,7 @@
   const BULLET_SPEED = 680;      // px/s
   const BULLET_R = 4;
   const BULLET_LIFE = 2100;      // ms
-  const FIRE_COOLDOWN = 756;     // ms (was 420; +50% then +20% more = 756ms)
+  const FIRE_COOLDOWN = 690;     // ms (was 756; ~9% faster average reload)
   const DAMAGE = 25;
   const MAX_HP = 100;
   const RAM_COOLDOWN_MS = 500; // min time between ram-damage ticks against the same peer
@@ -1288,7 +1288,7 @@
     overseer:  { srcKey:'overseer',  w:OVSR_C*2, h:OVSR_C*2, cx:OVSR_C, cy:OVSR_C, radius:T1_R, rotOffset:0, barrels:[{ angle:Math.PI/2, dist:OVSR_TIP }, { angle:-Math.PI/2, dist:OVSR_TIP }] },
     destroyer: { srcKey:'destroyer', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:SPRITE_DESTROYER_ROTATE_OFFSET, barrels:BARRELS_DESTROYER, bulletRadius:DESTROYER_BULLET_RADIUS, fireMul:2.2, dmgMul:2.5 },
     firework:  { srcKey:'firework', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:0, barrels:[{ angle:FIREWORK_TILT, dist:FIREWORK_TIP_DIST }], bulletRadius:FIREWORK_BALL_RADIUS, fireMul:3, dmgMul:1.6, speedMul:0.75, firework:true },
-    behemoth:  { srcKey:'behemoth', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:0, barrels:[{ angle:0, dist:BEHEMOTH_TIP_DIST }], bulletRadius:SPRITE_DESTROYER_RADIUS, fireMul:2.8, dmgMul:3.2, speedMul:0.8 },
+    behemoth:  { srcKey:'behemoth', w:SPRITE_DESTROYER_W, h:SPRITE_DESTROYER_H, cx:SPRITE_DESTROYER_CX, cy:SPRITE_DESTROYER_CY, radius:SPRITE_DESTROYER_RADIUS, rotOffset:0, barrels:[{ angle:0, dist:BEHEMOTH_TIP_DIST }], bulletRadius:SPRITE_DESTROYER_RADIUS, fireMul:1, dmgMul:3.2, speedMul:0.8 },
   };
   const LOADOUT_SOURCES = {
     single: SPRITE_SRC_SINGLE,
@@ -1714,7 +1714,7 @@
     });
   }
 
-  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', predator:'PREDATOR', quintet:'QUINTET', quadtwin:'QUAD TWIN', overlord:'OVERLORD', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER', firework:'FIREWORK', behemoth:'BEHEMOTH' };
+  const LOADOUT_TITLES = { twin:'TWIN', machinegun:'MACHINE GUN', sniper:'SNIPER', gunner:'GUNNER', hunter:'HUNTER', predator:'PREDATOR', quintet:'QUINTET', quadtwin:'QUAD TWIN', overlord:'OVERLORD', overseer:'OVERSEER', triple:'TRIPLE CANNON', parallel:'DIAGONAL CANNON', triplet:'TRIPLET', quad:'QUAD', necro:'NECROMANCER', octo:'OCTO', destroyer:'DESTROYER', firework:'FIREWORK', behemoth:'ANNIHILATOR' };
   let choiceOptions = ['triple','parallel'];
   let choiceTier = 7;
   function buildLoadoutTiles(){
@@ -3873,7 +3873,7 @@
   // ---------------------------------------------------------------
   const ADMIN_TANKS = [
     ['single','SINGLE'], ['twin','TWIN'], ['machinegun','MACHINE GUN'], ['sniper','SNIPER'], ['gunner','GUNNER'], ['dual','OLD TWIN'], ['triple','TRIPLE'], ['parallel','DIAGONAL'], ['omni','OMNI'],
-    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['firework','FIREWORK'], ['behemoth','BEHEMOTH'], ['overseer','OVERSEER'], ['hunter','HUNTER'], ['predator','PREDATOR'], ['quintet','QUINTET'], ['quadtwin','QUAD TWIN'], ['overlord','OVERLORD'],
+    ['triplet','TRIPLET'], ['quad','QUAD'], ['necro','NECROMANCER'], ['octo','OCTO'], ['destroyer','DESTROYER'], ['firework','FIREWORK'], ['behemoth','ANNIHILATOR'], ['overseer','OVERSEER'], ['hunter','HUNTER'], ['predator','PREDATOR'], ['quintet','QUINTET'], ['quadtwin','QUAD TWIN'], ['overlord','OVERLORD'],
   ];
   function openCmd(prefill){
     if (!state.room) return;
