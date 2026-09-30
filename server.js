@@ -2147,14 +2147,16 @@ function indexHtml() {
       lvl: { regen:0, maxhp:0, bodydmg:0, bulletspeed:0, penetration:0, bulletdmg:0, reload:0, movespeed:0 },
     };
   }
-  function effectiveMaxHp(){ return MAX_HP + state.upgrades.lvl.maxhp * 15; }
-  function effectiveMoveSpeed(){ return TANK_SPEED * state.settings.moveMult * (1 + state.upgrades.lvl.movespeed * 0.07); }
-  function effectiveBulletSpeed(){ return BULLET_SPEED * state.settings.bulletMult * (1 + state.upgrades.lvl.bulletspeed * 0.09); }
-  function effectiveFireCooldown(){ return FIRE_COOLDOWN * Math.pow(0.93, state.upgrades.lvl.reload); }
-  function effectiveDamage(){ return DAMAGE + state.upgrades.lvl.bulletdmg * 3; }
-  function effectiveBodyDamageBonus(){ return state.upgrades.lvl.bodydmg * 4; }
-  function effectiveRegenPerSec(){ return state.upgrades.lvl.regen * 1.1; }
-  function effectivePierce(){ return state.upgrades.lvl.penetration; }
+  // HP is never shown/stored with more than 1 decimal place
+  function hp1(v){ return Math.round((v||0) * 10) / 10; }
+  function effectiveMaxHp(){ return MAX_HP + state.upgrades.lvl.maxhp * 7.5; }
+  function effectiveMoveSpeed(){ return TANK_SPEED * state.settings.moveMult * (1 + state.upgrades.lvl.movespeed * 0.035); }
+  function effectiveBulletSpeed(){ return BULLET_SPEED * state.settings.bulletMult * (1 + state.upgrades.lvl.bulletspeed * 0.045); }
+  function effectiveFireCooldown(){ return FIRE_COOLDOWN * Math.pow(0.965, state.upgrades.lvl.reload); }
+  function effectiveDamage(){ return DAMAGE + state.upgrades.lvl.bulletdmg * 1.5; }
+  function effectiveBodyDamageBonus(){ return state.upgrades.lvl.bodydmg * 2; }
+  function effectiveRegenPerSec(){ return state.upgrades.lvl.regen * 0.6; }
+  function effectivePierce(){ return Math.floor(state.upgrades.lvl.penetration / 2); }
 
   // Award stat points on kill (replaces the old random-upgrade-on-kill).
   function grantStatPoint(n){
@@ -2180,10 +2182,10 @@ function indexHtml() {
       state.upgrades.points -= 1;
     }
     if (id === 'maxhp' && state.alive){
-      state.hp = Math.min(effectiveMaxHp(), state.hp + 15);
+      state.hp = Math.min(effectiveMaxHp(), state.hp + 7.5);
       if (state.room) state.room.presence({ hp: state.hp, maxHp: effectiveMaxHp() });
     }
-    byId('hudSelfHealth').textContent = 'HP ' + Math.round(state.hp) + ' / ' + effectiveMaxHp();
+    byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
     renderStatsPanel();
   }
 
@@ -2789,7 +2791,7 @@ function indexHtml() {
     state.currentSector = sector;
     state.roomMode = modeOfSector(sector);
     byId('hudRoomName').textContent = roomLabel(sector);
-    byId('hudSelfHealth').textContent = 'HP ' + state.hp + ' / ' + effectiveMaxHp();
+    byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
     switchScreen('screen-game');
     fitCanvas();
 
@@ -3634,10 +3636,10 @@ function indexHtml() {
     if (state.alive){
       const regenRate = effectiveRegenPerSec();
       if (regenRate > 0 && state.hp < effectiveMaxHp()){
-        const beforeFloor = Math.floor(state.hp);
+        const beforeShown = hp1(state.hp);
         state.hp = Math.min(effectiveMaxHp(), state.hp + regenRate * dt);
-        if (Math.floor(state.hp) !== beforeFloor){
-          byId('hudSelfHealth').textContent = 'HP ' + Math.floor(state.hp) + ' / ' + effectiveMaxHp();
+        if (hp1(state.hp) !== beforeShown){
+          byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
         }
       }
       updateFlags();
@@ -3684,7 +3686,7 @@ function indexHtml() {
       if (state.room && (nowMs - state.lastPresenceSend > 50)){
         state.lastPresenceSend = nowMs;
         const patch = { x: state.x, y: state.y, turretAngle: state.turretAngle, hidden: !!state.stealthHidden };
-        if (effectiveRegenPerSec() > 0) patch.hp = Math.floor(state.hp);
+        if (effectiveRegenPerSec() > 0) patch.hp = hp1(state.hp);
         if (state.drones.length || state.dronesSent){
           patch.drones = state.drones.map(d=>[d.id, Math.round(d.x*10)/10, Math.round(d.y*10)/10, Math.round(d.ang*100)/100, d.hp, d.maxHp]);
           patch.droneDmg = effectiveDamage() * 2; // drones hit twice as hard as bullets
@@ -3701,34 +3703,51 @@ function indexHtml() {
     const fwPop = (b)=>{ if (b.fw) fwQueue.push(b); return false; };
     state.bullets = state.bullets.filter(b=>{
       if (now - b.born > (b.life || BULLET_LIFE)) return fwPop(b);
-      b.x += b.vx * dt; b.y += b.vy * dt;
-      if (b.x < 0 || b.x > ARENA_W || b.y < 0 || b.y > ARENA_H){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
-      for (const o of OBSTACLES){
-        if (rectCircleCollide(b.x,b.y,b.r||BULLET_R,o)){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
-      }
-      // drones are immune to bullets -- bullets pass straight through them
-      // visual stop against any tank in the sector (unless this bullet still
-      // has penetration charges left, in which case it keeps flying and
-      // just can't hit the same tank twice)
-      for (const p of allPeers){
-        if (p.presence.alive === false) continue;
-        // team modes: bullets pass straight through teammates, no friendly fire
-        if (b.shooterTeam && p.presence.team && b.shooterTeam === p.presence.team) continue;
-        if (b.hitPeers && b.hitPeers.has(p.peer)) continue; // already pierced through this one
-        const ps = p.isMe ? null : state.remoteSmooth[p.peer];
-        const px = p.isMe ? state.x : (ps ? ps.x : p.presence.x), py = p.isMe ? state.y : (ps ? ps.y : p.presence.y);
-        if (px===undefined||py===undefined) continue;
-        const dx = b.x-px, dy = b.y-py;
-        if (dx*dx+dy*dy < (TANK_R+(b.r||BULLET_R))*(TANK_R+(b.r||BULLET_R))){
-          spawnSpark(b.x,b.y,b.color);
-          if (p.isMe && state.alive && b.shooterId !== state.myPeerId){
-            applyDamage(b.shooterId, b.shooterName, b.damage);
+      // Sub-step the movement so fast bullets (or a laggy/low-fps frame) can't
+      // skip over a tank or wall between two frames. Each sub-step moves at
+      // most SUB_MAX px, which is well below the smallest hit radius.
+      const br0 = b.r || BULLET_R;
+      const stepDist = Math.hypot(b.vx, b.vy) * dt;
+      const subMax = Math.max(3, Math.min(8, br0 + TANK_R * 0.25));
+      const steps = Math.min(40, Math.max(1, Math.ceil(stepDist / subMax)));
+      const sdt = dt / steps;
+      for (let si = 0; si < steps; si++){
+        b.x += b.vx * sdt; b.y += b.vy * sdt;
+        if (b.x < 0 || b.x > ARENA_W || b.y < 0 || b.y > ARENA_H){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
+        for (const o of OBSTACLES){
+          if (rectCircleCollide(b.x,b.y,b.r||BULLET_R,o)){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
+        }
+        // drones are immune to bullets -- bullets pass straight through them.
+        // Tanks stop the bullet unless it still has penetration charges left,
+        // in which case it keeps flying and just can't hit the same tank twice.
+        const hitR = TANK_R + (b.r||BULLET_R);
+        for (const p of allPeers){
+          if (p.presence.alive === false) continue;
+          // team modes: bullets pass straight through teammates, no friendly fire
+          if (b.shooterTeam && p.presence.team && b.shooterTeam === p.presence.team) continue;
+          if (b.hitPeers && b.hitPeers.has(p.peer)) continue; // already pierced through this one
+          const ps = p.isMe ? null : state.remoteSmooth[p.peer];
+          const px = p.isMe ? state.x : (ps ? ps.x : p.presence.x), py = p.isMe ? state.y : (ps ? ps.y : p.presence.y);
+          if (px===undefined||py===undefined) continue;
+          let dx = b.x-px, dy = b.y-py;
+          let hit = dx*dx+dy*dy < hitR*hitR;
+          // remote tanks are drawn at a smoothed position that lags the real
+          // (latest received) one, so also accept a hit on the real position
+          if (!hit && !p.isMe && p.presence.x !== undefined && p.presence.y !== undefined){
+            dx = b.x-p.presence.x; dy = b.y-p.presence.y;
+            hit = dx*dx+dy*dy < hitR*hitR;
           }
-          if ((b.pierce||0) <= 0) return fwPop(b);
-          b.pierce -= 1;
-          if (!b.hitPeers) b.hitPeers = new Set();
-          b.hitPeers.add(p.peer);
-          break; // resolve at most one hit per frame, then keep flying
+          if (hit){
+            spawnSpark(b.x,b.y,b.color);
+            if (p.isMe && state.alive && b.shooterId !== state.myPeerId){
+              applyDamage(b.shooterId, b.shooterName, b.damage);
+            }
+            if ((b.pierce||0) <= 0) return fwPop(b);
+            b.pierce -= 1;
+            if (!b.hitPeers) b.hitPeers = new Set();
+            b.hitPeers.add(p.peer);
+            break; // resolve at most one hit per sub-step, then keep flying
+          }
         }
       }
       return true;
@@ -3822,9 +3841,9 @@ function indexHtml() {
   }
 
   function applyDamage(shooterId, shooterName, dmg){
-    state.hp = Math.max(0, state.hp - (dmg || DAMAGE));
-    byId('hudSelfHealth').textContent = 'HP ' + state.hp + ' / ' + effectiveMaxHp();
-    state.room.presence({ hp: state.hp });
+    state.hp = hp1(Math.max(0, state.hp - (dmg || DAMAGE)));
+    byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
+    state.room.presence({ hp: hp1(state.hp) });
     if (state.hp <= 0 && state.alive){
       state.alive = false;
       state.streak = 0;
@@ -3851,7 +3870,7 @@ function indexHtml() {
     const spawn = SPAWNS[Math.floor(Math.random()*SPAWNS.length)];
     state.x = spawn.x; state.y = spawn.y; state.hp = effectiveMaxHp(); state.alive = true;
     state.zoneEnteredAt = null;
-    byId('hudSelfHealth').textContent = 'HP ' + state.hp + ' / ' + effectiveMaxHp();
+    byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
     state.room.presence({ x: state.x, y: state.y, hp: state.hp, maxHp: effectiveMaxHp(), alive: true });
   }
 
