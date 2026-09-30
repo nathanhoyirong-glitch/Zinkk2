@@ -2014,7 +2014,8 @@ function indexHtml() {
 
   const state = {
     name: '',
-    color: PALETTE[0],
+    color: PALETTE[0],        // colour of the tank in the current room (== chosenColor except in team modes)
+    chosenColor: PALETTE[0],  // what the player picked on the callsign screen -- never overwritten by joining a room
     settings: loadSettings(),
     room: null,          // room capability namespace
     connected: false,
@@ -2173,7 +2174,17 @@ function indexHtml() {
     const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
     return rgbToHsl(r,g,b)[0];
   }
-  function recolorSprite(img, targetHue){
+  // Recolor a sprite so its hull is EXACTLY the chosen palette color.
+  // (The old version only copied the hue and kept the sprite's own
+  // saturation/lightness, so the hull never matched the swatch the player
+  // clicked.) The sprite's flat hull fill is found automatically (the most
+  // common saturated color); every pixel of that fill becomes the target
+  // hex verbatim, and darker/lighter accents (outlines, shading) keep their
+  // relative saturation/lightness so the art still looks the same.
+  function hexToRgb(hex){
+    return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+  }
+  function recolorSprite(img, targetHex){
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
     const c = document.createElement('canvas');
@@ -2182,13 +2193,42 @@ function indexHtml() {
     cx.drawImage(img, 0, 0);
     const imgData = cx.getImageData(0,0,w,h);
     const d = imgData.data;
+
+    // pass 1: find the sprite's hull fill = most common opaque, saturated color
+    const counts = new Map();
+    let refKey = -1, refN = 0;
     for (let i=0; i<d.length; i+=4){
-      const a = d[i+3];
-      if (a === 0) continue;
-      const [h2,s,l] = rgbToHsl(d[i], d[i+1], d[i+2]);
+      if (d[i+3] < 250) continue;
+      const s = rgbToHsl(d[i], d[i+1], d[i+2])[1];
+      if (s < 0.15) continue;
+      const key = (d[i]<<16) | (d[i+1]<<8) | d[i+2];
+      const n = (counts.get(key) || 0) + 1;
+      counts.set(key, n);
+      if (n > refN){ refN = n; refKey = key; }
+    }
+    if (refKey < 0) return c;   // nothing to recolor
+    const refR = (refKey>>16)&255, refG = (refKey>>8)&255, refB = refKey&255;
+    const [, refS, refL] = rgbToHsl(refR, refG, refB);
+    const [tr, tg, tb] = hexToRgb(targetHex);
+    const [tH, tS, tL] = rgbToHsl(tr, tg, tb);
+
+    // pass 2: recolor
+    for (let i=0; i<d.length; i+=4){
+      if (d[i+3] === 0) continue;
+      const r = d[i], g = d[i+1], b = d[i+2];
+      const [, s, l] = rgbToHsl(r, g, b);
       if (s < 0.15) continue; // grayscale (barrel, shading) stays as-is
-      const [nr,ng,nb] = hslToRgb(targetHue, s, l);
-      d[i]=nr; d[i+1]=ng; d[i+2]=nb;
+      const dr = r-refR, dg = g-refG, db = b-refB;
+      if (dr*dr + dg*dg + db*db <= 14*14){
+        // the hull fill itself (incl. near-identical compression noise): exact target color
+        d[i]=tr; d[i+1]=tg; d[i+2]=tb;
+      } else {
+        // accents: keep their saturation/lightness relative to the hull fill
+        const ns = Math.min(1, tS * (s / (refS || 1)));
+        const nl = Math.min(1, Math.max(0, tL * (l / (refL || 1))));
+        const [nr,ng,nb] = hslToRgb(tH, ns, nl);
+        d[i]=nr; d[i+1]=ng; d[i+2]=nb;
+      }
     }
     cx.putImageData(imgData, 0, 0);
     return c;
@@ -2209,7 +2249,7 @@ function indexHtml() {
         if (!img) return;
         PALETTE.forEach(c=>{
           try {
-            state.spritesByLoadout[key][c.id] = recolorSprite(img, hexToHue(c.hex));
+            state.spritesByLoadout[key][c.id] = recolorSprite(img, c.hex);
           } catch(err){
             console.error('Recolor failed for', key, c.id, err);
           }
@@ -2495,6 +2535,7 @@ function indexHtml() {
       el.setAttribute('aria-label', 'Hull color ' + c.id);
       el.addEventListener('click', ()=>{
         state.color = c;
+        state.chosenColor = c;
         wrap.querySelectorAll('.swatch').forEach(s=>s.classList.remove('picked'));
         el.classList.add('picked');
       });
@@ -2506,7 +2547,7 @@ function indexHtml() {
     state.name = (state.account && state.account.username) ? state.account.username.slice(0,16) : 'GUEST';
     switchScreen('screen-lobby');
     if (state.room){
-      await state.room.presence({ name: state.name, color: state.color.id, roomId: null, alive: false, hp: 0, score: 0 });
+      await state.room.presence({ name: state.name, color: state.chosenColor.id, roomId: null, alive: false, hp: 0, score: 0 });
       // learn my own peer label
       setTimeout(()=>{
         const mine = state.room.peers().find(p=>p.isMe);
@@ -2600,20 +2641,16 @@ function indexHtml() {
     const count = peersIn(sector).length;
     if (count >= (meta ? meta.cap : capOf(sector))){ showToast(roomLabel(sector) + ' is full.'); return; }
 
-    let color = state.color;
+    let color = state.chosenColor;
     let team = null;
     if (teamMode){
       // team modes: hull color IS the team color, assigned to balance sides
       team = assignTeam(sector);
       color = teamPaletteColor(team);
-    } else {
-      // FFA: pick a free color in that sector, falling back to my chosen color
-      const used = new Set(peersIn(sector).map(p=>p.presence.color));
-      if (used.has(color.id)){
-        const free = PALETTE.find(c=>!used.has(c.id));
-        if (free) color = free;
-      }
     }
+    // FFA: the hull is always exactly the color the player picked, even if
+    // another tank already uses it (names tell them apart). Only team modes
+    // override it, because there the hull color IS the team.
     state.color = color;
     state.team = team;
     state.carrying = null;
@@ -2644,20 +2681,6 @@ function indexHtml() {
         showToast(roomLabel(sector) + ' filled up just before you — try the other one.');
         renderLobby();
         return;
-      }
-      // in FFA, if someone who joined before me already has my color, take
-      // the next free one instead (two people can pick the same slot at
-      // once). Team-mode colors are meaningful (they ARE the team), so
-      // duplicates there are expected and left alone.
-      if (!teamMode){
-        const earlierColors = new Set(list.slice(0, idx).map(p=>p.presence.color));
-        if (earlierColors.has(state.color.id)){
-          const free = PALETTE.find(c=>!earlierColors.has(c.id));
-          if (free){
-            state.color = free;
-            state.room.presence({ color: free.id });
-          }
-        }
       }
       enterGame(sector);
     }, 260);
@@ -3998,7 +4021,8 @@ function indexHtml() {
   function leaveSector(){
     state.adminTank = null; closeCmd(); closeAdmin(); closeLogin(); closeChat();
     state.waitingToStart = false; closeWaitPanel();
-    if (state.room) state.room.presence({ roomId: null, roomMeta: null, adminTank: null, alive:false, team: null, carrying: null });
+    state.color = state.chosenColor;   // give back the colour the player picked (team rooms override it while inside)
+    if (state.room) state.room.presence({ roomId: null, roomMeta: null, adminTank: null, alive:false, team: null, carrying: null, color: state.chosenColor.id });
     if (state.unsubShoot) state.unsubShoot();
     if (state.unsubKill) state.unsubKill();
     if (state.unsubDrone) state.unsubDrone();
