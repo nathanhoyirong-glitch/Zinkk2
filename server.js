@@ -1444,8 +1444,8 @@ function indexHtml() {
   const MAX_DRONES = 8;                    // per player
   const DRONE_HP_RATIO = 0.5;              // a drone has half of its owner's max health
   const DRONE_SIZE = 17.6;                 // drone square side; hull square side is 32 -> 0.55 ratio
-  const PREDATOR_KILLS = 20;  // kills for a Hunter to become the Predator
-  const LOADOUT20_KILLS = 20; // kills needed to become the Necromancer (square bullets only)
+  const PREDATOR_KILLS = 14;  // kills for the top-tier (formerly 20-kill) upgrades
+  const LOADOUT20_KILLS = 14; // kills needed to become the Necromancer (square bullets only)
   const LOADOUT14_KILLS = 14; // kills needed to unlock the 14-kill cannon (pick triplet or quad)
 
   // diep.io-style stat allocation: 8 stats, each levelled 0..STAT_MAX using
