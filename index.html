@@ -367,6 +367,15 @@
   @media (max-width:420px) { .map-grid { grid-template-columns:repeat(2,1fr); } }
   .map-card { display:flex; flex-direction:column; align-items:center; gap:6px; padding:8px 6px; background:var(--panel-2); border:1px solid var(--line-bright); color:var(--ink-dim); text-align:center; }
   .map-card.picked { border-color:var(--green); color:var(--ink); box-shadow:0 0 0 1px var(--green); }
+  .map-card.disabled { opacity:0.3; cursor:not-allowed; filter:grayscale(1); }
+  .sd-spec {
+    position:absolute; left:50%; bottom:150px; transform:translateX(-50%); z-index:6;
+    display:none; align-items:center; gap:12px; padding:8px 12px; font-size:12px; letter-spacing:0.08em;
+    background:rgba(var(--panel-rgb),0.88); border:1px solid var(--line-bright); border-radius:var(--radius); color:var(--ink);
+  }
+  .sd-spec.show { display:flex; }
+  .sd-spec button { background:transparent; border:1px solid var(--green); color:var(--green); padding:4px 10px; font:inherit; cursor:pointer; letter-spacing:0.08em; }
+  #sdPoison.low { color:#9acd32; border-color:#9acd32; }
   .map-card canvas { width:60px; height:60px; display:block; border:1px solid var(--line); }
   .map-card .mn { font-size:10px; letter-spacing:0.06em; font-weight:700; }
   .map-card .md { font-size:10px; line-height:1.3; }
@@ -562,6 +571,7 @@
           <span class="match-timer" id="matchTimer"></span>
           <span class="match-timer" id="droneCount"></span>
           <span class="match-timer" id="zoneWarn"></span>
+          <span class="match-timer" id="sdPoison"></span>
         </div>
         <div class="score-strip" id="scoreStrip"></div>
       </div>
@@ -576,6 +586,7 @@
       </div>
 
       <div class="killfeed" id="killfeed"></div>
+      <div class="sd-spec" id="sdSpec"><span id="sdSpecText"></span><button type="button" id="sdSpecNext">NEXT</button></div>
       <div class="linkstat"><span class="dot" id="gameLinkDot"></span><span id="gameLinkText">LINK OK</span></div>
 
       <div class="stats-panel" id="statsPanel">
@@ -643,7 +654,7 @@
 <div class="settings-backdrop" id="resultBackdrop">
   <div class="settings-panel bracket">
     <span class="bl"></span><span class="br"></span>
-    <div class="settings-head"><h3>ROOM 1 &mdash; TIME'S UP</h3></div>
+    <div class="settings-head"><h3 id="resultTitle">ROOM 1 &mdash; TIME'S UP</h3></div>
     <div class="result-winner" id="resultWinner"></div>
     <div id="resultList"></div>
     <button class="btn-primary" id="resultCloseBtn" style="width:100%;margin-top:18px;">BACK TO LOBBY</button>
@@ -669,6 +680,11 @@
       <div class="settings-label"><span>GAME MODE</span><span id="hostModeName"></span></div>
       <div class="theme-toggle" id="hostModeToggle"></div>
       <div class="mode-desc" id="hostModeDesc"></div>
+    </div>
+    <div class="settings-row" id="hostSdRow" style="display:none;">
+      <div class="settings-label"><span>SHOWDOWN FORMAT</span><span id="hostSdName"></span></div>
+      <div class="theme-toggle" id="hostSdToggle"></div>
+      <div class="mode-desc">Needs an even number of players to start. Not available on the Tetris maps.</div>
     </div>
     <div class="settings-row">
       <div class="settings-label"><span>MAX PLAYERS</span></div>
@@ -1446,7 +1462,7 @@
 
   const HOST_CAPS = [2,4,6,8,10];
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const hostDraft = { map:'crossfire', cap:4, mode:'ffa' };
+  const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdTeams:false };
   const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze'];
   let OBSTACLES = CLASSIC_OBSTACLES;
 
@@ -1470,8 +1486,22 @@
     { id:'ffa',   label:'FFA',          desc:'Every tank for itself.' },
     { id:'teams', label:'2 TEAMS',      desc:'Red vs Blue. No friendly fire; team score = combined kills.' },
     { id:'ctf',   label:'CAPTURE FLAG', desc:'Red vs Blue. Steal the enemy flag and bring it to your base to score.' },
+    { id:'showdown', label:'SHOWDOWN',  desc:'Last team or player standing wins. No respawns. Poison smoke creeps in from the walls; shoot chests for upgrades (1 chest = 2 kills, lucky = 3).' },
   ];
   const TEAM_IDS = ['red','blue'];
+  // Showdown tuning. Maps listed here can't be picked for a Showdown room (the two Tetris maps).
+  const SD_BLOCKED_MAPS = ['tetris', 'grid'];
+  const SD = {
+    GRACE_MS: 20000,        // calm before the smoke starts closing
+    START_R: 1100,          // safe-circle radius at the start -- just past the corners (1060px from centre)
+    SHRINK_PX_S: 4.6,       // how fast the smoke creeps in (px/sec); ~4 min from corners to centre
+    TICK_MS: 1000,          // poison stings once per tick...
+    POISON_DMG: 10,         // ...for this much HP
+    CHESTS_BASE: 6,         // chests on the map = this + max players
+    CHEST_HP: 100, CHEST_R: 26, CHEST_GAP: 230,
+    LUCKY_CHANCE: 0.25,     // chance a chest pays 3 instead of 2
+    RINGS: 14, RING_D0: 60, RING_STEP: 85, PER_RING: 56,   // smoke puff field
+  };
   const MIN_HOST_START_PLAYERS = 2; // hosted rooms need this many joined before the host can hit START
 
   const SPAWNS = [
@@ -1532,6 +1562,7 @@
     currentSector: null, // 'A' | 'B' | null
     waitingToStart: false, // true while sitting in a hosted room's pre-start lobby
     roomMode: null,       // 'ffa' | 'teams' | 'ctf' (only meaningful while currentSector is set)
+    sd: null, sdOut: false, sdTeams: false, unsubSd: null,   // Showdown runtime
     team: null,           // 'red' | 'blue' | null -- assigned on join in team modes, forced FFA otherwise
     carrying: null,       // 'red' | 'blue' | null -- which flag I'm currently carrying (CTF)
     captures: 0,          // my flag captures this room stay
@@ -2185,7 +2216,8 @@
     if (custom) state.joiningMeta = { sector, meta: newMeta || getRoomMeta(sector) };
     const meta = custom ? normMeta(state.joiningMeta.meta) : null;
     const mode = meta ? meta.mode : 'ffa';
-    const teamMode = mode === 'teams' || mode === 'ctf';
+    const teamMode = mode === 'teams' || mode === 'ctf' || (mode === 'showdown' && !!(meta && meta.teams));
+    if (meta && meta.mode === 'showdown' && meta.started){ showToast('That Showdown is already underway.'); return; }
     const count = peersIn(sector).length;
     if (count >= (meta ? meta.cap : capOf(sector))){ showToast(roomLabel(sector) + ' is full.'); return; }
 
@@ -2264,6 +2296,7 @@
     applyMap(mapOfSector(sector));
     state.currentSector = sector;
     state.roomMode = modeOfSector(sector);
+    { const m = getRoomMeta(sector); state.sdTeams = !!(m && m.mode === 'showdown' && m.teams); }
     byId('hudRoomName').textContent = roomLabel(sector);
     byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
     switchScreen('screen-game');
@@ -2287,6 +2320,7 @@
     setupStatsPanel();
     renderStatsPanel();
     state.lastFrame = performance.now();
+    if (state.roomMode === 'showdown') sdInit(); else state.sd = null;
     requestAnimationFrame(loop);
     renderScoreStrip();
   }
@@ -2321,7 +2355,7 @@
       pip.className = 'pip'; pip.style.background = colorHex(p.presence.color);
       row.appendChild(pip);
       const label = document.createElement('span');
-      label.textContent = (p.presence.name || 'OPERATOR') + (p.isMe ? ' (you)' : '');
+      label.textContent = (p.presence.name || 'OPERATOR') + (p.isMe ? ' (you)' : '') + (meta && meta.teams && p.presence.team ? ' \u00b7 ' + p.presence.team.toUpperCase() : '');
       row.appendChild(label);
       if (i === 0){
         const tag = document.createElement('span');
@@ -2333,17 +2367,23 @@
 
     const startBtn = byId('waitStartBtn');
     const statusEl = byId('waitStatus');
+    const sdRoom = !!(meta && meta.mode === 'showdown');
+    const sdOdd = sdRoom && (list.length % 2 !== 0);
+    const oddMsg = 'Showdown needs an EVEN number of players (' + list.length + ' joined) \u2014 wait for one more.';
     if (iAmHost){
-      if (list.length >= MIN_HOST_START_PLAYERS){
-        startBtn.style.display = 'block';
-        statusEl.textContent = '';
-      } else {
+      if (list.length < MIN_HOST_START_PLAYERS){
         startBtn.style.display = 'none';
         statusEl.textContent = 'Need at least ' + MIN_HOST_START_PLAYERS + ' players to start.';
+      } else if (sdOdd){
+        startBtn.style.display = 'none';
+        statusEl.textContent = oddMsg;
+      } else {
+        startBtn.style.display = 'block';
+        statusEl.textContent = sdRoom ? ('Last ' + (meta.teams ? 'team' : 'player') + ' standing wins.') : '';
       }
     } else {
       startBtn.style.display = 'none';
-      statusEl.textContent = 'Waiting for ' + (host ? (host.presence.name || 'the host') : 'the host') + ' to start the match\u2026';
+      statusEl.textContent = sdOdd ? oddMsg : ('Waiting for ' + (host ? (host.presence.name || 'the host') : 'the host') + ' to start the match\u2026');
     }
   }
   // Re-checked on every presence tick while waiting: picks up the host
@@ -2351,11 +2391,13 @@
   function checkWaitTransition(){
     if (!state.waitingToStart || !state.currentSector) return;
     if (roomStarted(state.currentSector)){ beginPlay(); return; }
+    sdRebalanceWaiting();
     renderWaitPanel();
   }
   byId('waitStartBtn').addEventListener('click', ()=>{
     if (!state.waitingToStart || !state.currentSector) return;
     const meta = getRoomMeta(state.currentSector) || normMeta(null);
+    if (meta.mode === 'showdown' && peersIn(state.currentSector).length % 2 !== 0){ showToast('Showdown needs an even number of players.'); return; }
     state.room.presence({ roomMeta: Object.assign({}, meta, { started: true }) });
   });
   byId('waitLeaveBtn').addEventListener('click', leaveSector);
@@ -2366,6 +2408,7 @@
     if (state.unsubDrone) state.unsubDrone();
     if (state.unsubFlag) state.unsubFlag();
     if (state.unsubChat) state.unsubChat();
+    if (state.unsubSd) state.unsubSd();
 
     // someone's tank absorbed one of my drones -- remove it
     state.unsubDrone = state.room.on('droneHit', (msg)=>{
@@ -2400,22 +2443,7 @@
       pushKillfeed((d.shooterName||'?') + ' downed ' + (d.victimName||'?'));
       spawnSpark(d.x, d.y, '#e3a857', 1);
       if (d.shooterId === state.myPeerId){
-        state.score += 1;
-        state.streak += 1;
-        state.room.presence({ score: state.score, streak: state.streak });
-        grantStatPoint(1);
-        if (state.score === FIRST_PICK_KILLS){
-          offerLoadoutChoice(1);
-        }
-        if (state.score === LOADOUT7_KILLS){
-          offerLoadoutChoice(7);
-        }
-        if (state.score === PREDATOR_KILLS && ['hunter','parallel','triple','quad','destroyer'].indexOf(state.loadout7) >= 0){
-          offerLoadoutChoice(20);   // Hunter: Predator/Quintet, Diagonal: Quintet/Octo, Triple or Quad: Triplet/Quad Twin
-        }
-        if (state.score === PREDATOR_KILLS && state.loadout7 === 'overseer'){
-          showToast('CANNON: OVERLORD');
-        }
+        creditKills(1, false);
       }
       renderScoreStrip();
     });
@@ -2441,6 +2469,19 @@
       if (d.roomId !== state.currentSector) return;
       pushChat(d.name || 'OPERATOR', d.color, d.text, false);
     });
+
+    // Showdown chests: the shooter reports damage, the room host decides the reward
+    const unsubChestHit = state.room.on('chestHit', (msg)=>{
+      const d = msg.data || {};
+      if (d.roomId !== state.currentSector || msg.isMe) return;
+      sdApplyChestDamage(d.chestId, d.dmg, d.shooterId, d.shooterName);
+    });
+    const unsubChestOpen = state.room.on('chestOpen', (msg)=>{
+      const d = msg.data || {};
+      if (d.roomId !== state.currentSector || msg.isMe) return;
+      sdOnChestOpen(d);
+    });
+    state.unsubSd = ()=>{ unsubChestHit(); unsubChestOpen(); };
   }
 
   function spawnBullet(id, shooterId, shooterName, x, y, angle, color, speed, damage, square, shooterTeam, pierce, radius, fw){
@@ -2639,7 +2680,7 @@
       return chip;
     }
 
-    if (state.roomMode === 'teams' || state.roomMode === 'ctf'){
+    if (state.roomMode === 'teams' || state.roomMode === 'ctf' || (state.roomMode === 'showdown' && state.sdTeams)){
       TEAM_IDS.forEach(team=>{
         const members = peersIn(state.currentSector).filter(p=>p.presence.team===team)
           .sort((a,b)=>(b.presence.score||0)-(a.presence.score||0));
@@ -2650,8 +2691,10 @@
         head.className = 'score-chip team-head';
         head.style.borderColor = colorHex(team);
         head.style.color = colorHex(team);
-        head.textContent = team.toUpperCase() + ' \u2014 ' + teamScore +
-          (state.roomMode === 'ctf' ? (' \u2022 ' + teamCaptures + '/' + CAPTURES_TO_WIN + ' \u2691') : '');
+        head.textContent = state.roomMode === 'showdown'
+          ? team.toUpperCase() + ' \u2014 ' + members.filter(p=>p.presence.alive!==false).length + ' ALIVE'
+          : team.toUpperCase() + ' \u2014 ' + teamScore +
+            (state.roomMode === 'ctf' ? (' \u2022 ' + teamCaptures + '/' + CAPTURES_TO_WIN + ' \u2691') : '');
         strip.appendChild(head);
         members.forEach(p=> strip.appendChild(chipFor(p)));
       });
@@ -3117,6 +3160,7 @@
 
   function update(dt){
     if (ACTIVE_MAP === 'tetris') ttUpdate();
+    if (state.sd) sdUpdate(dt);
     updateRemoteSmoothing(dt);
     updateRemoteDrones(dt);
     if (state.alive) updateDrones(dt);
@@ -3205,6 +3249,10 @@
           if (rectCircleCollide(b.x,b.y,b.r||BULLET_R,o)){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
         }
         if (ACTIVE_MAP === 'tetris' && ttBulletHit(b)) return fwPop(b);
+        if (state.sd && !state.sd.over){
+          const chest = sdChestAt(b.x, b.y, b.r || BULLET_R);
+          if (chest){ spawnSpark(b.x, b.y, '#f5c542'); sdChestShot(chest, b); return fwPop(b); }
+        }
         // drones are immune to bullets -- bullets pass straight through them.
         // Tanks stop the bullet unless it still has penetration charges left,
         // in which case it keeps flying and just can't hit the same tank twice.
@@ -3374,18 +3422,460 @@
         x: state.x, y: state.y, roomId: state.currentSector
       });
       spawnSpark(state.x, state.y, state.color.hex, 1);
-      setTimeout(respawn, RESPAWN_MS);
+      if (state.roomMode === 'showdown'){ state.sdOut = true; }   // Showdown: no respawns -- you're out
+      else setTimeout(respawn, RESPAWN_MS);
     }
   }
 
   function respawn(){
     if (!state.currentSector || state.alive) return; // left the room (or already back) while dead
+    if (state.roomMode === 'showdown') return;        // eliminated players stay out
     const spawn = SPAWNS[Math.floor(Math.random()*SPAWNS.length)];
     state.x = spawn.x; state.y = spawn.y; state.hp = effectiveMaxHp(); state.alive = true;
     state.invincibleUntil = performance.now() + SPAWN_PROTECT_MS;
     state.zoneEnteredAt = null;
     byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
     state.room.presence({ x: state.x, y: state.y, hp: state.hp, maxHp: effectiveMaxHp(), alive: true });
+  }
+
+  // ---------------------------------------------------------------
+  // SHOWDOWN -- host-only elimination mode (solo or 2 teams).
+  //  * No respawns: last player (or last team) standing wins.
+  //  * Poison smoke creeps in from the corners and walls toward the
+  //    centre; standing in it costs SD.POISON_DMG HP every SD.TICK_MS.
+  //  * Treasure chests are scattered around the arena. Shoot one open and
+  //    the shooter gets 2 kills' worth of upgrades (3 if lucky).
+  // Everything here is deterministic from the room id + the moment the
+  // match starts, so no extra network traffic is needed for the smoke.
+  // Only chest damage / chest opening go over the wire.
+  // ---------------------------------------------------------------
+  function sdHash(str){
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+    return h >>> 0;
+  }
+
+  function sdBuildChests(sector, cap){
+    const rng = ttRng(sdHash(String(sector)));
+    const want = SD.CHESTS_BASE + cap;
+    const out = [];
+    for (let tries = 0; tries < 5000 && out.length < want; tries++){
+      const x = 140 + rng() * (ARENA_W - 280), y = 140 + rng() * (ARENA_H - 280);
+      if (Math.hypot(x - ARENA_W / 2, y - ARENA_H / 2) > 900) continue;           // not hugging the corners
+      if (OBSTACLES.some(o => rectCircleCollide(x, y, SD.CHEST_R + 16, o))) continue;
+      if (SPAWNS.some(s => Math.hypot(s.x - x, s.y - y) < 220)) continue;          // never right on a spawn
+      if (out.some(c => Math.hypot(c.x - x, c.y - y) < SD.CHEST_GAP)) continue;
+      out.push({ id: out.length, x, y, hp: SD.CHEST_HP, opened: false, resolving: false, hitAt: 0, lastId: null, lastName: '' });
+    }
+    return out;
+  }
+
+  function sdBuildPuffField(sector){
+    const rng = ttRng(sdHash(String(sector)) ^ 0xA5A5A5);
+    const puffs = [];
+    for (let k = 0; k < SD.RINGS; k++){
+      for (let i = 0; i < SD.PER_RING; i++){
+        puffs.push({
+          d: SD.RING_D0 + k * SD.RING_STEP + (rng() - 0.5) * 40,   // distance beyond the safe-zone edge
+          a: (i + rng() * 0.8) / SD.PER_RING * Math.PI * 2,
+          s: 0.9 + rng() * 0.7, v: Math.floor(rng() * 4), ph: rng() * 6.283
+        });
+      }
+    }
+    puffs.sort((p, q) => q.d - p.d);   // deepest first, so the ragged leading edge is painted on top
+    return puffs;
+  }
+
+  // team members start on their own side of the map, solo players spread over all 8 spawn points
+  const SD_TEAM_SPAWNS = {
+    red:  [SPAWNS[0], SPAWNS[6], SPAWNS[2], SPAWNS[4]],
+    blue: [SPAWNS[1], SPAWNS[7], SPAWNS[3], SPAWNS[5]],
+  };
+  function sdPickSpawn(k, pool){
+    const base = pool[k % pool.length];
+    if (k < pool.length) return base;
+    // more players than spawn points: nudge toward the centre until the spot is clear
+    for (let step = 1; step <= 8; step++){
+      const f = step * 0.08;
+      const x = base.x + (ARENA_W / 2 - base.x) * f, y = base.y + (ARENA_H / 2 - base.y) * f;
+      if (canOccupy(x, y)) return { x, y };
+    }
+    return base;
+  }
+  function sdPlaceAtStart(){
+    const list = peersIn(state.currentSector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
+    let spawn;
+    if (state.sdTeams && state.team){
+      const mates = list.filter(p => (p.isMe ? state.team : p.presence.team) === state.team);
+      const k = Math.max(0, mates.findIndex(p => p.isMe));
+      spawn = sdPickSpawn(k, SD_TEAM_SPAWNS[state.team] || SPAWNS);
+    } else {
+      const k = Math.max(0, list.findIndex(p => p.isMe));
+      spawn = sdPickSpawn(k, SPAWNS);
+    }
+    state.x = spawn.x; state.y = spawn.y;
+    state.turretAngle = Math.atan2(ARENA_H / 2 - spawn.y, ARENA_W / 2 - spawn.x);
+    state.room.presence({ x: state.x, y: state.y, turretAngle: state.turretAngle, hp: state.hp, alive: true });
+  }
+
+  function sdInit(){
+    const sector = state.currentSector, meta = getRoomMeta(sector) || normMeta(null);
+    state.sd = {
+      startedAt: performance.now(), over: false, poisonAcc: 0, inSmoke: false, warned: false,
+      chests: sdBuildChests(sector, meta.cap), puffs: sdBuildPuffField(sector),
+      specId: null, lastCheck: 0, lastHud: 0,
+    };
+    state.sdOut = false;
+    sdPlaceAtStart();
+    state.invincibleUntil = performance.now() + 3000;   // clocks differ a little between players -- short grace at the bell
+    byId('sdSpec').classList.remove('show');
+    showToast('SHOWDOWN \u2014 shoot chests for upgrades. Poison smoke is coming!');
+  }
+
+  // radius of the safe circle right now (px from arena centre)
+  function sdRadius(){
+    const sd = state.sd; if (!sd) return Infinity;
+    const t = performance.now() - sd.startedAt - SD.GRACE_MS;
+    if (t <= 0) return SD.START_R;
+    return Math.max(0, SD.START_R - SD.SHRINK_PX_S * (t / 1000));
+  }
+  function sdInSmoke(x, y){ return Math.hypot(x - ARENA_W / 2, y - ARENA_H / 2) > sdRadius(); }
+
+  // ---- chests ----
+  function sdChestAt(x, y, r){
+    for (const c of state.sd.chests){
+      if (c.opened) continue;
+      if (Math.hypot(x - c.x, y - c.y) < SD.CHEST_R + r) return c;
+    }
+    return null;
+  }
+  // A bullet touched a chest on this screen. Only the SHOOTER's client reports it
+  // (same trust model as every other hit in this game); everyone applies the event.
+  function sdChestShot(ch, b){
+    if (b.shooterId !== state.myPeerId) return;
+    const dmg = b.damage || DAMAGE;
+    state.room.emit('chestHit', { roomId: state.currentSector, chestId: ch.id, dmg, shooterId: state.myPeerId, shooterName: state.name });
+    sdApplyChestDamage(ch.id, dmg, state.myPeerId, state.name);
+  }
+  function sdApplyChestDamage(chestId, dmg, shooterId, shooterName){
+    if (!state.sd) return;
+    const ch = state.sd.chests.find(c => c.id === chestId);
+    if (!ch || ch.opened) return;
+    ch.hp -= (Number(dmg) || DAMAGE);
+    ch.hitAt = performance.now();
+    ch.lastId = shooterId || null; ch.lastName = shooterName || '';
+    if (ch.hp <= 0) sdHostResolve();
+  }
+  // The room host decides the reward so every client agrees on it. If the host
+  // leaves mid-match, whoever becomes host next picks up any unresolved chest.
+  function sdHostResolve(){
+    const sd = state.sd;
+    if (!sd || sd.over || !isRoomHost(state.currentSector)) return;
+    sd.chests.forEach(c => {
+      if (c.opened || c.resolving || c.hp > 0) return;
+      c.resolving = true;
+      const d = {
+        roomId: state.currentSector, chestId: c.id,
+        reward: Math.random() < SD.LUCKY_CHANCE ? 3 : 2,
+        openerId: c.lastId, openerName: c.lastName
+      };
+      state.room.emit('chestOpen', d);
+      sdOnChestOpen(d);
+    });
+  }
+  function sdOnChestOpen(d){
+    if (!state.sd) return;
+    const ch = state.sd.chests.find(c => c.id === d.chestId);
+    if (!ch || ch.opened) return;
+    ch.opened = true; ch.hp = 0;
+    const reward = d.reward >= 3 ? 3 : 2;
+    spawnSpark(ch.x, ch.y, '#f5c542', true);
+    spawnSpark(ch.x + 14, ch.y - 10, '#fff2a8', true);
+    spawnSpark(ch.x - 14, ch.y + 8, '#f5c542', true);
+    pushKillfeed((d.openerName || '?') + ' cracked a chest ' + (reward === 3 ? '\u2014 LUCKY! +3' : '(+2)'));
+    if (d.openerId === state.myPeerId && state.alive){
+      creditKills(reward, true);
+      showToast(reward === 3 ? 'LUCKY CHEST! +3 KILLS WORTH' : 'CHEST! +2 KILLS WORTH');
+    }
+  }
+
+  // ---- per-frame: poison, chest resolution, win check ----
+  function sdUpdate(dt){
+    const sd = state.sd; if (!sd) return;
+    const now = performance.now();
+    sdHostResolve();
+    if (!sd.warned && now - sd.startedAt >= SD.GRACE_MS){ sd.warned = true; showToast('POISON SMOKE IS CLOSING IN!'); }
+
+    const poisonEl = byId('sdPoison');
+    if (state.alive && !sd.over){
+      const inSmoke = sdInSmoke(state.x, state.y);
+      if (inSmoke && !sd.inSmoke) sd.poisonAcc = SD.TICK_MS;     // first sting lands the moment you step in
+      sd.inSmoke = inSmoke;
+      if (inSmoke){
+        sd.poisonAcc += dt * 1000;
+        if (sd.poisonAcc >= SD.TICK_MS){
+          sd.poisonAcc -= SD.TICK_MS;
+          spawnSpark(state.x, state.y, '#9acd32');
+          applyDamage(null, 'THE SMOKE', SD.POISON_DMG);
+        }
+        poisonEl.textContent = '\u2620 POISONED \u2212' + SD.POISON_DMG + ' HP';
+        poisonEl.classList.add('low');
+      } else {
+        sd.poisonAcc = 0;
+        poisonEl.textContent = ''; poisonEl.classList.remove('low');
+      }
+    } else {
+      sd.inSmoke = false;
+      poisonEl.textContent = ''; poisonEl.classList.remove('low');
+    }
+
+    if (now - sd.lastCheck > 300){
+      sd.lastCheck = now;
+      sdUpdateSpectateBar();
+      if (!sd.over && now - sd.startedAt > 2500) sdCheckWinner();
+    }
+  }
+
+  function sdAlivePeers(){
+    return peersIn(state.currentSector).filter(p => p.isMe ? state.alive : p.presence.alive !== false);
+  }
+  function sdTeamOf(p){ return p.isMe ? state.team : p.presence.team; }
+
+  function sdCheckWinner(){
+    const sd = state.sd;
+    const alive = sdAlivePeers();
+    const groups = new Set(alive.map(p => state.sdTeams ? sdTeamOf(p) : p.peer));
+    if (groups.size > 1) return;
+    sd.over = true;
+    state.invincibleUntil = performance.now() + 1e9;     // the round is decided -- nothing else can hurt anyone
+    byId('sdSpec').classList.remove('show');
+    sdShowResult(alive);
+  }
+
+  function sdShowResult(alive){
+    const everyone = peersIn(state.currentSector);
+    const aliveIds = new Set(alive.map(p => p.peer));
+    const titleEl = byId('resultTitle'), winEl = byId('resultWinner'), list = byId('resultList');
+    titleEl.textContent = 'SHOWDOWN \u2014 MATCH OVER';
+    if (!alive.length) winEl.textContent = 'DRAW \u2014 NOBODY SURVIVED';
+    else if (state.sdTeams) winEl.textContent = String(sdTeamOf(alive[0]) || '?').toUpperCase() + ' TEAM WINS';
+    else winEl.textContent = (alive[0].isMe ? state.name : (alive[0].presence.name || 'OPERATOR')) + ' WINS';
+    const scoreOf = p => p.isMe ? state.score : (p.presence.score || 0);
+    list.innerHTML = '';
+    everyone.slice().sort((a, b) => (aliveIds.has(b.peer) - aliveIds.has(a.peer)) || (scoreOf(b) - scoreOf(a))).forEach(p => {
+      const row = document.createElement('div');
+      row.className = 'result-row' + (aliveIds.has(p.peer) ? ' win' : '');
+      const pip = document.createElement('span'); pip.className = 'pip'; pip.style.background = colorHex(p.isMe ? state.color.id : p.presence.color);
+      const name = document.createElement('span'); name.className = 'rname';
+      name.textContent = (p.isMe ? state.name : (p.presence.name || 'OPERATOR')) + (p.isMe ? ' (you)' : '') + (aliveIds.has(p.peer) ? ' \u2014 SURVIVOR' : '');
+      const sc = document.createElement('span'); sc.className = 'rscore';
+      const kills = scoreOf(p); sc.textContent = kills + (kills === 1 ? ' kill' : ' kills');
+      row.appendChild(pip); row.appendChild(name); row.appendChild(sc);
+      list.appendChild(row);
+    });
+    byId('resultCloseBtn').textContent = 'BACK TO LOBBY';
+    byId('resultBackdrop').classList.add('show');
+  }
+
+  // ---- spectating once you're out ----
+  function sdSpectateCandidates(){
+    return peersIn(state.currentSector).filter(p => !p.isMe && p.presence.alive !== false && p.presence.x !== undefined);
+  }
+  function sdSpectateTarget(){
+    const sd = state.sd; if (!sd) return null;
+    const cands = sdSpectateCandidates();
+    if (!cands.length) return null;
+    let t = cands.find(p => p.peer === sd.specId);
+    if (!t){
+      t = (state.sdTeams ? cands.find(p => p.presence.team === state.team) : null) || cands[0];
+      sd.specId = t.peer;
+    }
+    const s = state.remoteSmooth[t.peer];
+    return { x: s ? s.x : t.presence.x, y: s ? s.y : t.presence.y, peer: t.peer, name: nameLabel(t.peer, state.currentSector) };
+  }
+  function sdSpecNext(){
+    const sd = state.sd; if (!sd) return;
+    const cands = sdSpectateCandidates();
+    if (!cands.length) return;
+    const i = cands.findIndex(p => p.peer === sd.specId);
+    sd.specId = cands[(i + 1) % cands.length].peer;
+    sdUpdateSpectateBar();
+  }
+  function sdUpdateSpectateBar(){
+    const bar = byId('sdSpec');
+    if (!state.sd || state.alive || state.sd.over){ bar.classList.remove('show'); return; }
+    const t = sdSpectateTarget();
+    byId('sdSpecText').textContent = t ? ('ELIMINATED \u2014 WATCHING ' + t.name) : 'ELIMINATED';
+    byId('sdSpecNext').style.display = t ? '' : 'none';
+    bar.classList.add('show');
+  }
+
+  // ---- HUD text (shown in the top-bar match timer slot) ----
+  function sdHudInfo(){
+    const sd = state.sd;
+    if (sd.over) return { text: 'MATCH OVER', low: false };
+    const alive = sdAlivePeers();
+    let who;
+    if (state.sdTeams){
+      const r = alive.filter(p => sdTeamOf(p) === 'red').length, b = alive.filter(p => sdTeamOf(p) === 'blue').length;
+      who = 'RED ' + r + ' \u00b7 BLUE ' + b + ' ALIVE';
+    } else who = alive.length + ' ALIVE';
+    const el = performance.now() - sd.startedAt;
+    if (el < SD.GRACE_MS) return { text: who + ' \u00b7 SMOKE IN ' + fmtClock(SD.GRACE_MS - el), low: false };
+    const R = sdRadius();
+    return { text: who + ' \u00b7 ZONE CLOSED IN ' + fmtClock(R / SD.SHRINK_PX_S * 1000), low: state.alive && sdInSmoke(state.x, state.y) };
+  }
+
+  // ---- drawing: chests ----
+  function sdRR(c, x, y, w, h, r){
+    c.beginPath();
+    c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+  }
+  function sdDrawChests(){
+    const t = performance.now();
+    state.sd.chests.forEach(ch => {
+      if (ch.opened) return;
+      const since = t - ch.hitAt, hitFlash = since < 140;
+      const shake = hitFlash ? (Math.random() - 0.5) * 5 : 0;
+      const pulse = 0.5 + 0.5 * Math.sin(t / 320 + ch.id);
+      ctx.save();
+      ctx.translate(ch.x + shake, ch.y);
+      // golden glow so chests read from across the map
+      ctx.globalAlpha = 0.22 + 0.16 * pulse; ctx.fillStyle = '#ffd34d';
+      ctx.beginPath(); ctx.arc(0, 0, 36 + 5 * pulse, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      // drop shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(0, 22, 26, 6, 0, 0, Math.PI * 2); ctx.fill();
+      // body
+      ctx.fillStyle = hitFlash ? '#b98450' : '#7a4a1f'; sdRR(ctx, -23, -4, 46, 26, 4); ctx.fill();
+      // lid
+      ctx.fillStyle = hitFlash ? '#d49a5c' : '#9a6128'; sdRR(ctx, -23, -19, 46, 18, 8); ctx.fill();
+      // gold trim
+      ctx.fillStyle = '#f2c94c';
+      ctx.fillRect(-23, -5, 46, 4);
+      ctx.fillRect(-15, -19, 5, 41); ctx.fillRect(10, -19, 5, 41);
+      // lock
+      ctx.beginPath(); ctx.arc(0, -3, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#3d2410'; ctx.fillRect(-1.5, -6, 3, 6);
+      ctx.strokeStyle = '#3d2410'; ctx.lineWidth = 2;
+      sdRR(ctx, -23, -19, 46, 41, 6); ctx.stroke();
+      // health bar once it's been hit
+      if (ch.hp < SD.CHEST_HP){
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(-20, -32, 40, 5);
+        ctx.fillStyle = '#f5c542'; ctx.fillRect(-20, -32, 40 * Math.max(0, ch.hp) / SD.CHEST_HP, 5);
+      }
+      ctx.restore();
+    });
+  }
+
+  // ---- drawing: cartoon smoke (matches the reference: light yellow-green puffs with darker undersides) ----
+  let SD_PUFF_SPRITES = null;
+  function sdMakePuffSprites(){
+    const rng = ttRng(0x5EED5);
+    SD_PUFF_SPRITES = [];
+    for (let v = 0; v < 4; v++){
+      const W = 200, H = 180, cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const c = cv.getContext('2d');
+      const lumps = [], n = 7 + Math.floor(rng() * 3);
+      for (let i = 0; i < n; i++){
+        const a = rng() * Math.PI * 2, d = rng() * 40;
+        lumps.push({ x: W / 2 + Math.cos(a) * d * 1.35, y: H / 2 + 6 + Math.sin(a) * d * 0.8, r: 26 + rng() * 20 });
+      }
+      const disc = (x, y, r) => { c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); };
+      c.fillStyle = '#7fb02f'; lumps.forEach(l => disc(l.x + 4, l.y + 7, l.r));            // dark underside
+      c.fillStyle = '#9acd3c'; lumps.forEach(l => disc(l.x, l.y, l.r * 0.94));             // body
+      c.fillStyle = '#b9e155'; lumps.forEach(l => disc(l.x - 5, l.y - 6, l.r * 0.64));     // light top
+      // small round bubbles on the upper edge
+      c.fillStyle = '#c6ea68';
+      for (let i = 0; i < 3; i++){ const l = lumps[Math.floor(rng() * lumps.length)]; disc(l.x - l.r * 0.5, l.y - l.r * 0.55, 5 + rng() * 5); }
+      // curled shading lines along the bottom of a few lumps
+      c.strokeStyle = '#6f9f27'; c.lineWidth = 3; c.lineCap = 'round';
+      lumps.slice(0, 4).forEach(l => { c.beginPath(); c.arc(l.x + 2, l.y + 3, l.r * 0.72, Math.PI * 0.15, Math.PI * 0.75); c.stroke(); });
+      SD_PUFF_SPRITES.push(cv);
+    }
+  }
+  function sdDrawSmoke(camX, camY){
+    const sd = state.sd, R = sdRadius();
+    if (R > 1075) return;                                    // the corners are 1060px from the centre -- nothing to draw yet
+    if (!SD_PUFF_SPRITES) sdMakePuffSprites();
+    const cx = ARENA_W / 2, cy = ARENA_H / 2, t = performance.now();
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, ARENA_W, ARENA_H); ctx.clip();
+    // flat gas under the puffs: everything outside the safe circle
+    ctx.beginPath(); ctx.rect(-10, -10, ARENA_W + 20, ARENA_H + 20); ctx.arc(cx, cy, Math.max(0.01, R), 0, Math.PI * 2, true);
+    ctx.fillStyle = 'rgba(154,205,60,0.55)'; ctx.fill('evenodd');
+    // puffs, culled to the visible area
+    const x0 = camX - VIEW_W / 2 - 150, x1 = camX + VIEW_W / 2 + 150, y0 = camY - VIEW_H / 2 - 150, y1 = camY + VIEW_H / 2 + 150;
+    ctx.globalAlpha = 0.93;
+    for (const p of sd.puffs){
+      const rad = R + p.d;
+      if (rad < 0 || rad > 1250) continue;
+      const a = p.a + Math.sin(t / 4000 + p.ph) * 0.02;
+      const x = cx + Math.cos(a) * rad + Math.sin(t / 900 + p.ph) * 5;
+      const y = cy + Math.sin(a) * rad + Math.cos(t / 1100 + p.ph) * 5;
+      if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      const sc = p.s * (1 + 0.04 * Math.sin(t / 700 + p.ph)) * 0.95;
+      const spr = SD_PUFF_SPRITES[p.v], w = spr.width * sc, h = spr.height * sc;
+      ctx.drawImage(spr, x - w / 2, y - h / 2, w, h);
+    }
+    ctx.globalAlpha = 1;
+    // thin dashed line marks exactly where the poison starts
+    if (R > 1){
+      ctx.setLineDash([16, 12]); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.restore();
+  }
+  // faint green wash over the whole screen while you're being poisoned
+  function sdDrawTint(){
+    const sd = state.sd;
+    if (!sd.inSmoke || !state.alive || sd.over) return;
+    const a = 0.12 + 0.07 * Math.sin(performance.now() / 260);
+    ctx.fillStyle = 'rgba(160,210,50,' + a.toFixed(3) + ')';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
+
+
+  // while waiting in a Showdown TEAMS lobby, teams follow join order (1st red, 2nd blue, ...)
+  // so an even head-count always means perfectly even teams, even after people leave
+  function sdRebalanceWaiting(){
+    const sector = state.currentSector, meta = getRoomMeta(sector);
+    if (!meta || meta.mode !== 'showdown' || !meta.teams) return;
+    const list = peersIn(sector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
+    const idx = list.findIndex(p => p.isMe);
+    if (idx < 0) return;
+    const want = idx % 2 === 0 ? 'red' : 'blue';
+    if (state.team !== want){
+      state.team = want; state.color = teamPaletteColor(want);
+      state.room.presence({ team: want, color: state.color.id });
+    }
+  }
+  byId('sdSpecNext').addEventListener('click', sdSpecNext);
+
+  // Kills (and chests) feed the same progression: stat points + the 1 / 7 / 14 kill tank unlocks.
+  function creditKills(n, fromChest){
+    const before = state.score;
+    state.score += n;
+    if (!fromChest) state.streak += n;
+    state.room.presence({ score: state.score, streak: state.streak });
+    grantStatPoint(n);
+    for (let s = before + 1; s <= state.score; s++){
+      if (s === FIRST_PICK_KILLS){
+        offerLoadoutChoice(1);
+      }
+      if (s === LOADOUT7_KILLS){
+        offerLoadoutChoice(7);
+      }
+      if (s === PREDATOR_KILLS && ['hunter','parallel','triple','quad','destroyer'].indexOf(state.loadout7) >= 0){
+        offerLoadoutChoice(20);   // Hunter: Predator/Quintet, Diagonal: Quintet/Octo, Triple or Quad: Triplet/Quad Twin
+      }
+      if (s === PREDATOR_KILLS && state.loadout7 === 'overseer'){
+        showToast('CANNON: OVERLORD');
+      }
+    }
+    renderScoreStrip();
   }
 
   // ---- drawing ----
@@ -3484,14 +3974,17 @@
     ctx.clearRect(0,0,VIEW_W,VIEW_H);
 
     // camera follows the local player, clamped so it never shows past the map edge
-    const camX = clampCam(state.x, VIEW_W, ARENA_W);
-    const camY = clampCam(state.y, VIEW_H, ARENA_H);
+    let focusX = state.x, focusY = state.y;
+    if (state.sd && !state.alive){ const st = sdSpectateTarget(); if (st){ focusX = st.x; focusY = st.y; } }   // eliminated: watch someone still alive
+    const camX = clampCam(focusX, VIEW_W, ARENA_W);
+    const camY = clampCam(focusY, VIEW_H, ARENA_H);
 
     ctx.save();
     ctx.translate(VIEW_W/2 - camX, VIEW_H/2 - camY);
 
     ctx.drawImage(bgCanvas, 0, 0);
     if (ACTIVE_MAP === 'tetris') ttDraw(ctx);
+    if (state.sd){ sdDrawChests(); sdDrawSmoke(camX, camY); }
 
     // other tanks
     peersIn(state.currentSector).forEach(p=>{
@@ -3561,6 +4054,7 @@
     });
 
     ctx.restore();
+    if (state.sd) sdDrawTint();
   }
 
   function drawFlag(x,y,color,atBase){
@@ -3652,10 +4146,15 @@
     if (state.unsubDrone) state.unsubDrone();
     if (state.unsubFlag) state.unsubFlag();
     if (state.unsubChat) state.unsubChat();
+    if (state.unsubSd) state.unsubSd();
+    state.unsubSd = null;
     clearMyDrones();
     state.remoteDrones = {}; state.consumedDrones = {};
     state.currentSector = null;
     state.roomMode = null; state.team = null; state.carrying = null; state.captures = 0;
+    state.sd = null; state.sdOut = false; state.sdTeams = false;
+    byId('sdSpec').classList.remove('show'); byId('sdPoison').textContent = ''; byId('sdPoison').classList.remove('low');
+    byId('resultBackdrop').classList.remove('show');
     state.bullets = []; state.sparks = []; state.killfeed = [];
     state.chatLog = []; state.chatUnread = 0; byId('chatBtn').classList.remove('has-unread');
     state.zoneEnteredAt = null; byId('zoneWarn').textContent = ''; byId('zoneWarn').classList.remove('low');
@@ -3694,6 +4193,10 @@
     if (state.currentSector === TIMED_SECTOR){
       hudEl.textContent = matchEndsAt !== null ? text : 'WAITING FOR PLAYERS';
       hudEl.classList.toggle('low', low);
+    } else if (state.sd && state.currentSector){
+      const h = sdHudInfo();
+      hudEl.textContent = h.text;
+      hudEl.classList.toggle('low', h.low);
     } else {
       hudEl.textContent = '';
       hudEl.classList.remove('low');
@@ -3731,6 +4234,7 @@
   }
 
   function showMatchResult(msg){
+    byId('resultTitle').textContent = "ROOM 1 \u2014 TIME'S UP";
     const results = msg.results || [];
     const winners = msg.winners || [];
     const top = results.length ? results[0].score : 0;
@@ -3762,7 +4266,10 @@
     });
     byId('resultBackdrop').classList.add('show');
   }
-  byId('resultCloseBtn').addEventListener('click', ()=> byId('resultBackdrop').classList.remove('show'));
+  byId('resultCloseBtn').addEventListener('click', ()=>{
+    byId('resultBackdrop').classList.remove('show');
+    if (state.sd && state.currentSector) leaveSector();   // Showdown is over -- back to the lobby
+  });
 
   // ---- settings ----
   function refreshSettingsUI(){
@@ -3840,11 +4347,15 @@
   function isCustomRoom(id){ return typeof id === 'string' && /^H-[A-Z0-9]{5}$/.test(id); }
   function normMeta(m){
     const cap = parseInt(m && m.cap, 10);
+    const mode = (m && GAME_MODES.some(g=>g.id === m.mode)) ? m.mode : 'ffa';
+    let map = (m && MAPS[m.map]) ? m.map : 'crossfire';
+    if (mode === 'showdown' && SD_BLOCKED_MAPS.includes(map)) map = 'crossfire';   // Showdown never runs on the Tetris maps
     return {
       name: String((m && m.name) || 'CUSTOM ROOM').slice(0,20).toUpperCase(),
-      map: (m && MAPS[m.map]) ? m.map : 'crossfire',
+      map,
       cap: HOST_CAPS.includes(cap) ? cap : 4,
-      mode: (m && GAME_MODES.some(g=>g.id === m.mode)) ? m.mode : 'ffa',
+      mode,
+      teams: mode === 'showdown' && !!(m && m.teams),   // Showdown format: false = solo, true = 2 teams
       started: !!(m && m.started),
     };
   }
@@ -4118,7 +4629,7 @@
       card.className = 'room-card bracket';
       card.innerHTML = '<span class="bl"></span><span class="br"></span><h2></h2><div class="room-desc"></div><div class="room-count"></div><div class="slots"></div><div class="join-btn"><button></button></div>';
       card.querySelector('h2').textContent = r.meta.name;
-      const modeLabel = (GAME_MODES.find(g=>g.id===r.meta.mode) || GAME_MODES[0]).label;
+      const modeLabel = (GAME_MODES.find(g=>g.id===r.meta.mode) || GAME_MODES[0]).label + (r.meta.mode === 'showdown' ? (r.meta.teams ? ' (TEAMS)' : ' (SOLO)') : '');
       const statusLabel = r.meta.started ? 'LIVE' : 'WAITING TO START';
       card.querySelector('.room-desc').textContent = MAPS[r.meta.map].name + ' \u00b7 ' + modeLabel + ' \u00b7 ' + statusLabel + ' \u00b7 host: ' + (r.list[0].presence.name || 'OPERATOR');
       card.querySelector('.room-count').textContent = r.list.length + ' / ' + r.meta.cap + ' operators';
@@ -4138,8 +4649,9 @@
       }
       const full = r.list.length >= r.meta.cap;
       const btn = card.querySelector('button');
-      btn.disabled = full || !!state.currentSector;
-      btn.textContent = full ? 'ROOM FULL' : (state.currentSector === r.id ? 'DEPLOYED' : 'JOIN ' + r.meta.name);
+      const locked = r.meta.mode === 'showdown' && r.meta.started;   // Showdown can't be joined once the bell has rung
+      btn.disabled = full || locked || !!state.currentSector;
+      btn.textContent = full ? 'ROOM FULL' : (locked ? 'MATCH IN PROGRESS' : (state.currentSector === r.id ? 'DEPLOYED' : 'JOIN ' + r.meta.name));
       btn.addEventListener('click', ()=>joinSector(r.id));
       box.appendChild(card);
     });
@@ -4158,6 +4670,12 @@
     if (MAPS[id].colored) MAPS[id].colored.forEach(b=>{ c.fillStyle = b[4]; c.fillRect(b[0]*k, b[1]*k, Math.max(2,b[2]*k), Math.max(2,b[3]*k)); });
   }
   function refreshHostUI(){
+    const sdOn = hostDraft.mode === 'showdown';
+    if (sdOn && SD_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
+    byId('hostSdRow').style.display = sdOn ? '' : 'none';
+    byId('hostSdName').textContent = hostDraft.sdTeams ? '2 TEAMS' : 'SOLO';
+    byId('hostSdToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', (el.dataset.fmt === 'teams') === !!hostDraft.sdTeams));
+    byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('disabled', sdOn && SD_BLOCKED_MAPS.includes(el.dataset.map)));
     byId('hostMapName').textContent = MAPS[hostDraft.map].name;
     byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('picked', el.dataset.map === hostDraft.map));
     byId('hostCapToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', Number(el.dataset.cap) === hostDraft.cap));
@@ -4175,7 +4693,10 @@
       const n = document.createElement('span'); n.className = 'mn'; n.textContent = MAPS[id].name;
       const d = document.createElement('span'); d.className = 'md'; d.textContent = MAPS[id].desc;
       b.appendChild(cv); b.appendChild(n); b.appendChild(d);
-      b.addEventListener('click', ()=>{ hostDraft.map = id; refreshHostUI(); });
+      b.addEventListener('click', ()=>{
+        if (hostDraft.mode === 'showdown' && SD_BLOCKED_MAPS.includes(id)){ showToast("Showdown can't be played on the Tetris maps."); return; }
+        hostDraft.map = id; refreshHostUI();
+      });
       grid.appendChild(b);
       drawMapThumb(cv, id);
     });
@@ -4193,6 +4714,13 @@
       b.addEventListener('click', ()=>{ hostDraft.mode = g.id; refreshHostUI(); });
       modes.appendChild(b);
     });
+    const fmt = byId('hostSdToggle'); fmt.innerHTML = '';
+    [['solo','SOLO'], ['teams','2 TEAMS']].forEach(([id, label])=>{
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'theme-btn'; b.dataset.fmt = id; b.textContent = label;
+      b.addEventListener('click', ()=>{ hostDraft.sdTeams = (id === 'teams'); refreshHostUI(); });
+      fmt.appendChild(b);
+    });
     refreshHostUI();
   }
   function openHost(){
@@ -4209,7 +4737,7 @@
   byId('hostCreateBtn').addEventListener('click', ()=>{
     if (state.currentSector) return;
     if (!state.connected){ showToast('Not linked yet \u2014 try again in a moment.'); return; }
-    const meta = normMeta({ name: byId('hostNameInput').value.trim() || (state.name + "'S ROOM"), map: hostDraft.map, cap: hostDraft.cap, mode: hostDraft.mode });
+    const meta = normMeta({ name: byId('hostNameInput').value.trim() || (state.name + "'S ROOM"), map: hostDraft.map, cap: hostDraft.cap, mode: hostDraft.mode, teams: hostDraft.mode === 'showdown' && hostDraft.sdTeams });
     closeHost();
     joinSector(newRoomId(), meta);
   });

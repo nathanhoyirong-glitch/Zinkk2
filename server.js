@@ -52,10 +52,11 @@ const KNOWN_MAPS = new Set(['crossfire', 'flats', 'fortress', 'bunkers', 'grid',
 // Hosted-room game modes. 'ffa' (default) is every-tank-for-itself, exactly
 // like Room 1 / Room 2. 'teams' splits players into two sides (no friendly
 // fire, team score = sum of member kills). 'ctf' adds a flag each side must
-// steal and bring home. All the actual mode logic lives client-side in
+// steal and bring home. 'showdown' is last-one-standing (solo, or 2 teams when
+// roomMeta.teams is set) with closing poison smoke and loot chests. All the actual mode logic lives client-side in
 // index.html; the server only needs to keep the tag from being tampered
 // with into something unexpected.
-const KNOWN_MODES = new Set(['ffa', 'teams', 'ctf']);
+const KNOWN_MODES = new Set(['ffa', 'teams', 'ctf', 'showdown']);
 const KNOWN_TEAMS = new Set(['red', 'blue']);
 // ---- admin (/admin in-game) ----
 // The /admin login prompt itself only asks for ADMIN_PASSWORD -- no
@@ -156,6 +157,8 @@ function sanitizePresence(d) {
       map: KNOWN_MAPS.has(m.map) ? m.map : 'crossfire',
       cap: Math.max(2, Math.min(10, parseInt(m.cap, 10) || 4)),
       mode: KNOWN_MODES.has(m.mode) ? m.mode : 'ffa',
+      // Showdown format: false = solo, true = 2 teams (ignored for every other mode)
+      teams: m.mode === 'showdown' && !!m.teams,
       started: !!m.started
     };
   }
