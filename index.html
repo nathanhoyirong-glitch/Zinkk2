@@ -1486,7 +1486,7 @@
     { id:'ffa',   label:'FFA',          desc:'Every tank for itself.' },
     { id:'teams', label:'2 TEAMS',      desc:'Red vs Blue. No friendly fire; team score = combined kills.' },
     { id:'ctf',   label:'CAPTURE FLAG', desc:'Red vs Blue. Steal the enemy flag and bring it to your base to score.' },
-    { id:'showdown', label:'SHOWDOWN',  desc:'Last team or player standing wins. No respawns. Poison smoke creeps in from the walls; shoot chests for upgrades (1 chest = 2 kills, lucky = 3).' },
+    { id:'showdown', label:'SHOWDOWN',  desc:'Last team or player standing wins. No respawns. Poison smoke creeps in from the walls; shoot crates for upgrades (1 crate = 2 kills, lucky = 3).' },
   ];
   const TEAM_IDS = ['red','blue'];
   // Showdown tuning. Maps listed here can't be picked for a Showdown room (the two Tetris maps).
@@ -3739,31 +3739,43 @@
       const since = t - ch.hitAt, hitFlash = since < 140;
       const shake = hitFlash ? (Math.random() - 0.5) * 5 : 0;
       const pulse = 0.5 + 0.5 * Math.sin(t / 320 + ch.id);
+      const H = 25;                       // half-size of the crate
       ctx.save();
       ctx.translate(ch.x + shake, ch.y);
-      // golden glow so chests read from across the map
-      ctx.globalAlpha = 0.22 + 0.16 * pulse; ctx.fillStyle = '#ffd34d';
-      ctx.beginPath(); ctx.arc(0, 0, 36 + 5 * pulse, 0, Math.PI * 2); ctx.fill();
+      // soft glow so crates still read from across the map
+      ctx.globalAlpha = 0.18 + 0.12 * pulse; ctx.fillStyle = '#ffd34d';
+      ctx.beginPath(); ctx.arc(0, 0, 38 + 5 * pulse, 0, Math.PI * 2); ctx.fill();
       ctx.globalAlpha = 1;
       // drop shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(0, 22, 26, 6, 0, 0, Math.PI * 2); ctx.fill();
-      // body
-      ctx.fillStyle = hitFlash ? '#b98450' : '#7a4a1f'; sdRR(ctx, -23, -4, 46, 26, 4); ctx.fill();
-      // lid
-      ctx.fillStyle = hitFlash ? '#d49a5c' : '#9a6128'; sdRR(ctx, -23, -19, 46, 18, 8); ctx.fill();
-      // gold trim
-      ctx.fillStyle = '#f2c94c';
-      ctx.fillRect(-23, -5, 46, 4);
-      ctx.fillRect(-15, -19, 5, 41); ctx.fillRect(10, -19, 5, 41);
-      // lock
-      ctx.beginPath(); ctx.arc(0, -3, 6, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#3d2410'; ctx.fillRect(-1.5, -6, 3, 6);
-      ctx.strokeStyle = '#3d2410'; ctx.lineWidth = 2;
-      sdRR(ctx, -23, -19, 46, 41, 6); ctx.stroke();
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; sdRR(ctx, -H + 3, -H + 5, H * 2, H * 2, 3); ctx.fill();
+      const frame = hitFlash ? '#b8723c' : '#9a5728';
+      const panel = hitFlash ? '#e08a52' : '#c96d38';
+      // outer frame
+      ctx.fillStyle = frame; ctx.fillRect(-H, -H, H * 2, H * 2);
+      ctx.strokeStyle = '#6b3510'; ctx.lineWidth = 1.5; ctx.strokeRect(-H, -H, H * 2, H * 2);
+      // inner panel (with a darker inset edge on the left/bottom)
+      const I = 17;
+      ctx.fillStyle = '#6b3a15'; ctx.fillRect(-I, -I, I * 2, I * 2);
+      ctx.fillStyle = panel; ctx.fillRect(-I + 2, -I, I * 2 - 2, I * 2 - 2);
+      // vertical plank lines
+      ctx.strokeStyle = hitFlash ? '#cf7a45' : '#b35c2a'; ctx.lineWidth = 1;
+      for (let i = -3; i <= 3; i++){ ctx.beginPath(); ctx.moveTo(i * 4.6, -I); ctx.lineTo(i * 4.6, I - 2); ctx.stroke(); }
+      // X brace
+      ctx.save();
+      ctx.beginPath(); ctx.rect(-I, -I, I * 2, I * 2); ctx.clip();
+      ctx.strokeStyle = frame; ctx.lineWidth = 8.5; ctx.lineCap = 'butt';
+      ctx.beginPath(); ctx.moveTo(-I - 4, -I - 4); ctx.lineTo(I + 4, I + 4);
+      ctx.moveTo(I + 4, -I - 4); ctx.lineTo(-I - 4, I + 4); ctx.stroke();
+      ctx.restore();
+      // corner screws
+      ctx.fillStyle = '#3d1c08';
+      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sy]) => {
+        ctx.beginPath(); ctx.arc(sx * 21, sy * 21, 2.1, 0, Math.PI * 2); ctx.fill();
+      });
       // health bar once it's been hit
       if (ch.hp < SD.CHEST_HP){
-        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(-20, -32, 40, 5);
-        ctx.fillStyle = '#f5c542'; ctx.fillRect(-20, -32, 40 * Math.max(0, ch.hp) / SD.CHEST_HP, 5);
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(-20, -38, 40, 5);
+        ctx.fillStyle = '#f5c542'; ctx.fillRect(-20, -38, 40 * Math.max(0, ch.hp) / SD.CHEST_HP, 5);
       }
       ctx.restore();
     });
@@ -3796,19 +3808,30 @@
       SD_PUFF_SPRITES.push(cv);
     }
   }
+  let SD_SMOKE_CV = null;
   function sdDrawSmoke(camX, camY){
     const sd = state.sd, R = sdRadius();
     if (R > 1075) return;                                    // the corners are 1060px from the centre -- nothing to draw yet
     if (!SD_PUFF_SPRITES) sdMakePuffSprites();
     const cx = ARENA_W / 2, cy = ARENA_H / 2, t = performance.now();
-    ctx.save();
-    ctx.beginPath(); ctx.rect(0, 0, ARENA_W, ARENA_H); ctx.clip();
-    // flat gas under the puffs: everything outside the safe circle
-    ctx.beginPath(); ctx.rect(-10, -10, ARENA_W + 20, ARENA_H + 20); ctx.arc(cx, cy, Math.max(0.01, R), 0, Math.PI * 2, true);
-    ctx.fillStyle = 'rgba(154,205,60,0.55)'; ctx.fill('evenodd');
+    // smoke is painted on its own layer so we can cut clear windows around the tanks
+    const main = ctx;
+    if (!SD_SMOKE_CV) SD_SMOKE_CV = document.createElement('canvas');
+    if (SD_SMOKE_CV.width !== main.canvas.width || SD_SMOKE_CV.height !== main.canvas.height){
+      SD_SMOKE_CV.width = main.canvas.width; SD_SMOKE_CV.height = main.canvas.height;
+    }
+    const c = SD_SMOKE_CV.getContext('2d');
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, SD_SMOKE_CV.width, SD_SMOKE_CV.height);
+    c.setTransform(main.getTransform());
+    c.save();
+    c.beginPath(); c.rect(0, 0, ARENA_W, ARENA_H); c.clip();
+    // thin gas under the puffs: everything outside the safe circle
+    c.beginPath(); c.rect(-10, -10, ARENA_W + 20, ARENA_H + 20); c.arc(cx, cy, Math.max(0.01, R), 0, Math.PI * 2, true);
+    c.fillStyle = 'rgba(154,205,60,0.22)'; c.fill('evenodd');
     // puffs, culled to the visible area
     const x0 = camX - VIEW_W / 2 - 150, x1 = camX + VIEW_W / 2 + 150, y0 = camY - VIEW_H / 2 - 150, y1 = camY + VIEW_H / 2 + 150;
-    ctx.globalAlpha = 0.93;
+    c.globalAlpha = 0.5;
     for (const p of sd.puffs){
       const rad = R + p.d;
       if (rad < 0 || rad > 1250) continue;
@@ -3818,15 +3841,37 @@
       if (x < x0 || x > x1 || y < y0 || y > y1) continue;
       const sc = p.s * (1 + 0.04 * Math.sin(t / 700 + p.ph)) * 0.95;
       const spr = SD_PUFF_SPRITES[p.v], w = spr.width * sc, h = spr.height * sc;
-      ctx.drawImage(spr, x - w / 2, y - h / 2, w, h);
+      c.drawImage(spr, x - w / 2, y - h / 2, w, h);
     }
-    ctx.globalAlpha = 1;
+    c.globalAlpha = 1;
+    c.restore();
+    // clear, soft-edged windows so every tank stays visible inside the smoke
+    c.globalCompositeOperation = 'destination-out';
+    const hole = (x, y, r) => {
+      const g = c.createRadialGradient(x, y, r * 0.25, x, y, r);
+      g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(0.6, 'rgba(0,0,0,0.9)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+    };
+    if (state.alive) hole(state.x, state.y, 190);
+    peersIn(state.currentSector).forEach(p => {
+      if (p.isMe || p.presence.alive === false || p.presence.x === undefined) return;
+      const s = state.remoteSmooth[p.peer] || p.presence;
+      hole(s.x, s.y, 130);
+    });
+    c.globalCompositeOperation = 'source-over';
+    // composite the smoke layer onto the game canvas in screen space
+    main.save();
+    main.setTransform(1, 0, 0, 1, 0, 0);
+    main.drawImage(SD_SMOKE_CV, 0, 0);
+    main.restore();
     // thin dashed line marks exactly where the poison starts
     if (R > 1){
-      ctx.setLineDash([16, 12]); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      main.save();
+      main.beginPath(); main.rect(0, 0, ARENA_W, ARENA_H); main.clip();
+      main.setLineDash([16, 12]); main.lineWidth = 3; main.strokeStyle = 'rgba(255,255,255,0.45)';
+      main.beginPath(); main.arc(cx, cy, R, 0, Math.PI * 2); main.stroke(); main.setLineDash([]);
+      main.restore();
     }
-    ctx.restore();
   }
   // faint green wash over the whole screen while you're being poisoned
   function sdDrawTint(){
