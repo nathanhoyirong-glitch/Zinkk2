@@ -818,7 +818,7 @@
   // ---------------------------------------------------------------
   // Config
   // ---------------------------------------------------------------
-  const ARENA_W = 1500, ARENA_H = 1500;  // 50 x 50 grid squares (GRID_SIZE 30)
+  let ARENA_W = 1500, ARENA_H = 1500;    // 50 x 50 grid squares (GRID_SIZE 30) -- some maps (LOST ENDS) are bigger, see applyMap()
   const ZOOM = 1.3;                      // world units -> CSS px; >1 zooms in a bit
   const FOV_MULT = 1.5;                  // Sniper & Hunter see 1.5x more of the map (width and height)
   let curZoom = ZOOM, lastZoomT = 0, viewCssW = 620 * ZOOM, viewCssH = 875 * ZOOM;
@@ -1410,6 +1410,52 @@
       {x:80,y:930,w:70,h:70},{x:520,y:650,w:70,h:70},{x:1240,y:80,w:50,h:50},
       {x:490,y:470,w:50,h:50},{x:690,y:660,w:50,h:50}
   ];
+  // LOST ENDS: a gigantic 100 x 100 square (3000 x 3000 px) maze. Walls are 1 square thick, corridors 2 squares wide.
+  function buildLostEnds(){
+    const C = 33, S = 100, SQ = 30;
+    const rng = ttRng(0x10575E7D);
+    const wall = []; for (let v = 0; v < S; v++) wall.push(new Uint8Array(S).fill(1));
+    const openCell = (i, j) => { for (let dv = 0; dv < 2; dv++) for (let du = 0; du < 2; du++) wall[1 + 3*j + dv][1 + 3*i + du] = 0; };
+    const openLink = (i, j, di, dj) => {   // knock out the wall between cell (i,j) and its neighbour
+      if (di) { const u = di > 0 ? 3 + 3*i : 3*i; for (let dv = 0; dv < 2; dv++) wall[1 + 3*j + dv][u] = 0; }
+      else    { const v = dj > 0 ? 3 + 3*j : 3*j; for (let du = 0; du < 2; du++) wall[v][1 + 3*i + du] = 0; }
+    };
+    for (let j = 0; j < C; j++) for (let i = 0; i < C; i++) openCell(i, j);
+    // recursive-backtracker maze (long winding corridors, plenty of dead ends)
+    const seen = new Uint8Array(C * C), stack = [[0, 0]]; seen[0] = 1;
+    const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
+    while (stack.length){
+      const [i, j] = stack[stack.length - 1];
+      const opts = DIRS.filter(([di, dj]) => { const a = i + di, b = j + dj; return a >= 0 && b >= 0 && a < C && b < C && !seen[b*C + a]; });
+      if (!opts.length){ stack.pop(); continue; }
+      const [di, dj] = opts[Math.floor(rng() * opts.length)];
+      openLink(i, j, di, dj); seen[(j+dj)*C + (i+di)] = 1; stack.push([i + di, j + dj]);
+    }
+    // a few extra openings so the maze has some loops and isn't one single path
+    for (let j = 0; j < C; j++) for (let i = 0; i < C; i++){
+      if (i < C-1 && rng() < 0.05 && wall[1+3*j][3+3*i]) openLink(i, j, 1, 0);
+      if (j < C-1 && rng() < 0.05 && wall[3+3*j][1+3*i]) openLink(i, j, 0, 1);
+    }
+    // spawn rooms: 2x2-cell open rooms along all four sides (3 per side)
+    const zones = [], mid = [3, 15, 27];
+    const room = (ci, cj) => {
+      for (let v = 1 + 3*cj; v <= 2 + 3*(cj+1); v++) for (let u = 1 + 3*ci; u <= 2 + 3*(ci+1); u++) wall[v][u] = 0;
+      zones.push({ x: 90*ci + 105, y: 90*cj + 105 });
+    };
+    mid.forEach(k => { room(k, 0); room(k, C - 2); room(0, k); room(C - 2, k); });
+    // merge wall squares into as few rectangles as possible
+    const obstacles = [], active = {};
+    for (let v = 0; v <= S; v++){
+      const runs = [];
+      if (v < S){ let u = 0; while (u < S){ if (!wall[v][u]){ u++; continue; } let e = u; while (e < S && wall[v][e]) e++; runs.push([u, e - u]); u = e; } }
+      const keys = new Set(runs.map(r => r[0] + '_' + r[1]));
+      for (const k of Object.keys(active)){ if (!keys.has(k)){ obstacles.push(active[k]); delete active[k]; } }
+      for (const [u, len] of runs){ const k = u + '_' + len; if (active[k]) active[k].h += SQ; else active[k] = { x: u*SQ, y: v*SQ, w: len*SQ, h: SQ }; }
+    }
+    return { obstacles, zones, size: S * SQ };
+  }
+  
+  const LOST_ENDS = buildLostEnds();
   const MAPS = {
     crossfire: { name:'CROSSFIRE RUINS', desc:'L and T walls everywhere', obstacles: CLASSIC_OBSTACLES },
     flats: { name:'OPEN FLATS', desc:'Fewer, bigger L and T walls', obstacles:[
@@ -1443,6 +1489,7 @@
     deadends: { name:'DEAD ENDS', desc:'Alleys run from every edge to a dead end, all linked through a central room', obstacles:[
       {x:510,y:0,w:30,h:390},{x:510,y:1110,w:30,h:390},{x:660,y:0,w:30,h:390},{x:660,y:1110,w:30,h:390},{x:810,y:0,w:30,h:390},{x:810,y:1110,w:30,h:390},{x:960,y:0,w:30,h:390},{x:960,y:1110,w:30,h:390},{x:0,y:510,w:390,h:30},{x:1110,y:510,w:390,h:30},{x:0,y:660,w:390,h:30},{x:1110,y:660,w:390,h:30},{x:0,y:810,w:390,h:30},{x:1110,y:810,w:390,h:30},{x:0,y:960,w:390,h:30},{x:1110,y:960,w:390,h:30},{x:240,y:0,w:30,h:210},{x:1230,y:0,w:30,h:210},{x:240,y:1290,w:30,h:210},{x:1230,y:1290,w:30,h:210},{x:570,y:570,w:120,h:30},{x:810,y:570,w:120,h:30},{x:570,y:900,w:120,h:30},{x:810,y:900,w:120,h:30},{x:570,y:570,w:30,h:120},{x:570,y:810,w:30,h:120},{x:900,y:570,w:30,h:120},{x:900,y:810,w:30,h:120},{x:720,y:720,w:60,h:60},{x:330,y:330,w:60,h:60},{x:1110,y:330,w:60,h:60},{x:330,y:1110,w:60,h:60},{x:1110,y:1110,w:60,h:60}
     ] },
+    lostends: { name:'LOST ENDS', desc:'Gigantic 100x100 maze. Spawn at the sides; teams start together', obstacles: LOST_ENDS.obstacles, size: LOST_ENDS.size, zones: LOST_ENDS.zones, tight: true },
     tetris: { name:'TETRIS', desc:'Blocks rain down and vanish on landing. Shoot them or get hit.', obstacles:[],
       colored:[[0,1350,300,75,'#22d3ee'],[300,1425,150,75,'#facc15'],[450,1350,225,75,'#a855f7'],[675,1425,225,75,'#22c55e'],
                [900,1350,225,75,'#3b82f6'],[1125,1425,225,75,'#f97316'],[1350,1350,150,150,'#ef4444'],
@@ -1466,7 +1513,7 @@
   const HOST_CAPS = [2,4,6,8,9,10];   // 9 is only offered for Showdown TRIO (3 teams of 3)
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdFmt:'solo' };   // sdFmt: 'solo' | 'duo' | 'trio'
-  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze','deadends'];
+  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze','deadends','lostends'];
   let OBSTACLES = CLASSIC_OBSTACLES;
 
   // ---- TETRIS map state (see the TETRIS section above applyMap) ----
@@ -1496,6 +1543,7 @@
   function sdSizeOfMeta(meta){ return !meta || !meta.teams ? 0 : (meta.teams === 'trio' ? 3 : 2); }
   // Showdown tuning. Maps listed here can't be picked for a Showdown room (the two Tetris maps).
   const SD_BLOCKED_MAPS = ['tetris', 'grid'];
+  const CTF_BLOCKED_MAPS = ['lostends'];   // flag bases are fixed for the 1500px arenas
   const SD = {
     GRACE_MS: 20000,        // calm before the smoke starts closing
     SHRINK_PX_S: 3.2,       // how fast each wall's smoke creeps inward (px/sec); ~4 min until it meets in the middle
@@ -2330,7 +2378,11 @@
     if (state.roomMode === 'showdown') sdInit();
     else {
       state.sd = null;
-      const sp = pickSpawnPoint();       // a different part of the map each time
+      let sp = pickSpawnPoint();         // a different part of the map each time
+      if (state.roomMode === 'teams' && state.team && mapHasZones()){
+        const mates = peersIn(state.currentSector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0)).filter(p => (p.isMe ? state.team : p.presence.team) === state.team);
+        sp = teamSlot(sdSpreadOrder()[TEAM_IDS.indexOf(state.team) % mapSpawnPoints().length], Math.max(0, mates.findIndex(p => p.isMe)), 3);
+      }
       state.x = sp.x; state.y = sp.y;
       state.room.presence({ x: state.x, y: state.y });
     }
@@ -3462,6 +3514,7 @@
   let SPAWN_CACHE = { map: null, pts: null };
   function mapSpawnPoints(){
     if (ACTIVE_MAP === 'tetris') return SPAWNS;               // blocks move around -- keep the safe fixed spots
+    if (MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].zones) return MAPS[ACTIVE_MAP].zones;   // LOST ENDS: spawn rooms along the sides
     if (SPAWN_CACHE.map === ACTIVE_MAP && SPAWN_CACHE.pts) return SPAWN_CACHE.pts;
     const STEP = 15, N = Math.floor(ARENA_W / STEP), M = TANK_R + 14;
     const clear = (x, y) => {
@@ -3500,12 +3553,24 @@
     const pts = state.roomMode === 'ctf' ? SPAWNS : mapSpawnPoints();
     const foes = state.currentSector ? peersIn(state.currentSector).filter(p => !p.isMe && p.presence.alive !== false && p.presence.x !== undefined) : [];
     const dist = pt => foes.length ? Math.min(...foes.map(p => Math.hypot(p.presence.x - pt.x, p.presence.y - pt.y))) : 9999;
+    // team games on a spawn-room map: the whole team comes back together in its own room
+    if (state.roomMode === 'teams' && state.team && mapHasZones()){
+      const z = sdSpreadOrder()[TEAM_IDS.indexOf(state.team) % pts.length];
+      return teamSlot(z, Math.floor(Math.random() * 3), 3);
+    }
     const far = pts.filter(pt => dist(pt) >= 450);
-    if (far.length) return far[Math.floor(Math.random() * far.length)];
-    return pts.reduce((best, pt) => dist(pt) > dist(best) ? pt : best, pts[0]);
+    const pick = far.length ? far[Math.floor(Math.random() * far.length)] : pts.reduce((best, pt) => dist(pt) > dist(best) ? pt : best, pts[0]);
+    return mapHasZones() ? teamSlot(pick, Math.floor(Math.random() * 3), 3) : pick;
+  }
+  function mapHasZones(){ return !!(MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].zones); }
+  // spot inside a 150px spawn room for team member m (of n) so teammates stand side by side
+  function teamSlot(z, m, n){
+    const offs = n >= 3 ? [[-35,-25],[35,-25],[0,35]] : [[-30,0],[30,0]];
+    const o = offs[m % offs.length];
+    return { x: z.x + o[0], y: z.y + o[1] };
   }
   // Showdown start: farthest-point ordering, shared seed -> everyone gets a different, well-spread spot
-  function sdSpreadSpawn(k){
+  function sdSpreadOrder(){
     const pts = mapSpawnPoints().slice();
     const rng = ttRng(sdHash(String(state.currentSector)) ^ 0x7777);
     const order = [pts.splice(Math.floor(rng() * pts.length), 1)[0]];
@@ -3514,6 +3579,10 @@
       pts.forEach((p, i) => { const d = Math.min(...order.map(o => Math.hypot(o.x - p.x, o.y - p.y))); if (d > bd){ bd = d; bi = i; } });
       order.push(pts.splice(bi, 1)[0]);
     }
+    return order;
+  }
+  function sdSpreadSpawn(k){
+    const order = sdSpreadOrder();
     return order[k % order.length];
   }
 
@@ -3547,13 +3616,17 @@
 
   function sdBuildChests(sector, cap){
     const rng = ttRng(sdHash(String(sector)));
-    const want = SD.CHESTS_BASE + cap;
+    const area = (ARENA_W / 1500) * (ARENA_H / 1500);
+    const want = Math.round((SD.CHESTS_BASE + cap) * area);
+    const tight = !!(MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].tight), clr = tight ? 28 : SD.CHEST_R + 16;
     const out = [];
-    for (let tries = 0; tries < 5000 && out.length < want; tries++){
-      const x = 140 + rng() * (ARENA_W - 280), y = 140 + rng() * (ARENA_H - 280);
-      if (Math.hypot(x - ARENA_W / 2, y - ARENA_H / 2) > 900) continue;           // not hugging the corners
-      if (OBSTACLES.some(o => rectCircleCollide(x, y, SD.CHEST_R + 16, o))) continue;
-      if (SPAWNS.some(s => Math.hypot(s.x - x, s.y - y) < 220)) continue;          // never right on a spawn
+    for (let tries = 0; tries < 5000 * area && out.length < want; tries++){
+      // maze corridors are only 60px wide, so crates sit dead-centre in a random corridor cell instead of anywhere
+      const x = tight ? 60 + 90 * Math.floor(rng() * 33) : 140 + rng() * (ARENA_W - 280);
+      const y = tight ? 60 + 90 * Math.floor(rng() * 33) : 140 + rng() * (ARENA_H - 280);
+      if (!tight && Math.hypot(x - ARENA_W / 2, y - ARENA_H / 2) > 900) continue;  // not hugging the corners
+      if (OBSTACLES.some(o => rectCircleCollide(x, y, clr, o))) continue;
+      if (mapSpawnPoints().some(s => Math.hypot(s.x - x, s.y - y) < 220)) continue;   // never right on a spawn
       if (out.some(c => Math.hypot(c.x - x, c.y - y) < SD.CHEST_GAP)) continue;
       out.push({ id: out.length, x, y, hp: SD.CHEST_HP, opened: false, resolving: false, hitAt: 0, lastId: null, lastName: '' });
     }
@@ -3565,7 +3638,7 @@
   function sdBuildCloudField(sector){
     const rng = ttRng(sdHash(String(sector)) ^ 0xA5A5A5);
     const clouds = [], M = 50;
-    for (let tries = 0; tries < 6000; tries++){
+    for (let tries = 0, maxTries = Math.round(6000 * (ARENA_W / 1500) * (ARENA_H / 1500)); tries < maxTries; tries++){
       const x = -M + rng() * (ARENA_W + 2 * M), y = -M + rng() * (ARENA_H + 2 * M);
       if (clouds.some(c => Math.hypot(c.x - x, c.y - y) < SD.CLOUD_GAP)) continue;
       clouds.push({
@@ -3596,7 +3669,13 @@
   function sdPlaceAtStart(){
     const list = peersIn(state.currentSector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
     let spawn;
-    {
+    if (state.sdTeams && state.team && mapHasZones()){
+      // duo / trio on a spawn-room map: the whole team starts together in one room
+      const mates = list.filter(p => (p.isMe ? state.team : p.presence.team) === state.team);
+      const m = Math.max(0, mates.findIndex(p => p.isMe));
+      const room = sdSpreadSpawn(Math.max(0, SD_TEAM_IDS.indexOf(state.team)));
+      spawn = teamSlot(room, m, state.sdTeamSize);
+    } else {
       const k = Math.max(0, list.findIndex(p => p.isMe));
       spawn = sdSpreadSpawn(k);
     }
@@ -3624,8 +3703,10 @@
     const sd = state.sd; if (!sd) return 0;
     const t = performance.now() - sd.startedAt - SD.GRACE_MS;
     if (t <= 0) return 0;
-    return Math.min(Math.min(ARENA_W, ARENA_H) / 2, SD.SHRINK_PX_S * (t / 1000));
+    return Math.min(Math.min(ARENA_W, ARENA_H) / 2, sdShrink() * (t / 1000));
   }
+  // the smoke speed scales with the arena so a 3000px map still closes in ~4 minutes
+  function sdShrink(){ return SD.SHRINK_PX_S * ARENA_W / 1500; }
   function sdInSmoke(x, y){
     const m = sdInset(); if (m <= 0) return false;
     return x < m || x > ARENA_W - m || y < m || y > ARENA_H - m;
@@ -3715,7 +3796,7 @@
     const mx = sm ? sm.x : mate.presence.x, my = sm ? sm.y : mate.presence.y;
     const face = sm ? sm.angle : (mate.presence.turretAngle || 0);
     let px = mx, py = my, found = false;
-    for (const dist of [70, 55, 90, 110]){
+    for (const dist of [70, 45, 55, 90, 110]){
       for (const da of [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.4, -2.4]){
         const a = face + Math.PI + da;
         const x = mx + Math.cos(a) * dist, y = my + Math.sin(a) * dist;
@@ -3895,7 +3976,7 @@
     const el = performance.now() - sd.startedAt;
     if (el < SD.GRACE_MS) return { text: who + ' \u00b7 SMOKE IN ' + fmtClock(SD.GRACE_MS - el), low: false };
     const left = Math.min(ARENA_W, ARENA_H) / 2 - sdInset();
-    return { text: who + ' \u00b7 ZONE CLOSED IN ' + fmtClock(left / SD.SHRINK_PX_S * 1000), low: state.alive && sdInSmoke(state.x, state.y) };
+    return { text: who + ' \u00b7 ZONE CLOSED IN ' + fmtClock(left / sdShrink() * 1000), low: state.alive && sdInSmoke(state.x, state.y) };
   }
 
   // ---- drawing: chests ----
@@ -4579,6 +4660,7 @@
     const mode = (m && GAME_MODES.some(g=>g.id === m.mode)) ? m.mode : 'ffa';
     let map = (m && MAPS[m.map]) ? m.map : 'crossfire';
     if (mode === 'showdown' && SD_BLOCKED_MAPS.includes(map)) map = 'crossfire';   // Showdown never runs on the Tetris maps
+    if (mode === 'ctf' && CTF_BLOCKED_MAPS.includes(map)) map = 'crossfire';
     // Showdown format: false = solo, 'duo' = teams of 2, 'trio' = teams of 3 (max 9 players)
     const teams = mode === 'showdown' && m ? (m.teams === 'trio' ? 'trio' : (m.teams === 'duo' || m.teams === true) ? 'duo' : false) : false;
     let capOk = HOST_CAPS.includes(cap) ? cap : 4;
@@ -4820,6 +4902,7 @@
 
   function applyMap(id){
     ACTIVE_MAP = id;
+    ARENA_W = ARENA_H = (MAPS[id] && MAPS[id].size) || 1500;
     if (id === 'tetris'){
       TETRIS = null;
       OBSTACLES = []; HAZARDS = [];
@@ -4899,7 +4982,7 @@
 
   // ---- host modal ----
   function drawMapThumb(cv, id){
-    const pal = canvasPalette(), k = cv.width / ARENA_W, c = cv.getContext('2d');
+    const pal = canvasPalette(), k = cv.width / ((MAPS[id] && MAPS[id].size) || 1500), c = cv.getContext('2d');
     c.fillStyle = pal.bg; c.fillRect(0,0,cv.width,cv.height);
     if (MAPS[id].hazards && MAPS[id].hazards.length){
       c.fillStyle = pal.hazardFill;
@@ -4912,6 +4995,7 @@
   function refreshHostUI(){
     const sdOn = hostDraft.mode === 'showdown';
     if (sdOn && SD_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
+    if (hostDraft.mode === 'ctf' && CTF_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
     byId('hostSdRow').style.display = sdOn ? '' : 'none';
     byId('hostSdName').textContent = hostDraft.sdFmt === 'trio' ? 'TRIO \u00b7 3 PER TEAM \u00b7 MAX 9' : hostDraft.sdFmt === 'duo' ? 'DUO \u00b7 2 PER TEAM' : 'SOLO';
     byId('hostSdToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', el.dataset.fmt === hostDraft.sdFmt));
@@ -4920,7 +5004,7 @@
     const validCaps = fmtNow === 'trio' ? [6, 9] : fmtNow === 'duo' ? [4, 6, 8, 10] : [2, 4, 6, 8, 10];
     if (!validCaps.includes(hostDraft.cap)) hostDraft.cap = validCaps.find(n => n >= hostDraft.cap) || validCaps[validCaps.length - 1];
     byId('hostCapToggle').querySelectorAll('.theme-btn').forEach(el=>{ el.style.display = validCaps.includes(Number(el.dataset.cap)) ? '' : 'none'; });
-    byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('disabled', sdOn && SD_BLOCKED_MAPS.includes(el.dataset.map)));
+    byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('disabled', (sdOn && SD_BLOCKED_MAPS.includes(el.dataset.map)) || (hostDraft.mode === 'ctf' && CTF_BLOCKED_MAPS.includes(el.dataset.map))));
     byId('hostMapName').textContent = MAPS[hostDraft.map].name;
     byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('picked', el.dataset.map === hostDraft.map));
     byId('hostCapToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', Number(el.dataset.cap) === hostDraft.cap));
@@ -4940,6 +5024,7 @@
       b.appendChild(cv); b.appendChild(n); b.appendChild(d);
       b.addEventListener('click', ()=>{
         if (hostDraft.mode === 'showdown' && SD_BLOCKED_MAPS.includes(id)){ showToast("Showdown can't be played on the Tetris maps."); return; }
+        if (hostDraft.mode === 'ctf' && CTF_BLOCKED_MAPS.includes(id)){ showToast("Capture the flag can't be played on Lost Ends."); return; }
         hostDraft.map = id; refreshHostUI();
       });
       grid.appendChild(b);
