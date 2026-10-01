@@ -48,7 +48,7 @@ const peers = new Map();
 // roomMeta {name,map,cap}). Clamp whatever clients send so a bad client
 // can't push odd room ids or oversized values to everyone else.
 const ROOM_ID_RE = /^(A|B|H-[A-Z0-9]{5})$/;
-const KNOWN_MAPS = new Set(['crossfire', 'flats', 'fortress', 'bunkers', 'grid', 'cross']);
+const KNOWN_MAPS = new Set(['crossfire', 'flats', 'fortress', 'bunkers', 'grid', 'cross', 'tetris']);
 // Hosted-room game modes. 'ffa' (default) is every-tank-for-itself, exactly
 // like Room 1 / Room 2. 'teams' splits players into two sides (no friendly
 // fire, team score = sum of member kills). 'ctf' adds a flag each side must
@@ -2039,6 +2039,10 @@ function indexHtml() {
       {x:520,y:870,w:40,h:210},{x:460,y:955,w:100,h:40}
     ] },
     grid: { name:'TETRIS YARD', desc:'Dense L, T and block clutter', obstacles: GRID_PILLARS },
+    tetris: { name:'TETRIS', desc:'Blocks rain down and lines vanish. Get hit by a falling block and you take damage.', obstacles:[],
+      colored:[[0,1350,300,75,'#22d3ee'],[300,1425,150,75,'#facc15'],[450,1350,225,75,'#a855f7'],[675,1425,225,75,'#22c55e'],
+               [900,1350,225,75,'#3b82f6'],[1125,1425,225,75,'#f97316'],[1350,1350,150,150,'#ef4444'],
+               [225,450,225,75,'#a855f7'],[300,525,75,75,'#a855f7'],[900,150,150,150,'#facc15'],[1125,525,75,225,'#22d3ee']] },
     cross: { name:'RUBBLE', desc:'Thin broken L and T walls', obstacles:[
       {x:1140,y:274,w:150,h:36},{x:1140,y:170,w:36,h:140},{x:280,y:1160,w:36,h:120},
       {x:210,y:1202,w:106,h:36},{x:1170,y:1060,w:190,h:36},{x:1324,y:1060,w:36,h:210},
@@ -2058,8 +2062,17 @@ function indexHtml() {
   const HOST_CAPS = [2,4,6,8,10];
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const hostDraft = { map:'crossfire', cap:4, mode:'ffa' };
-  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross'];
+  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris'];
   let OBSTACLES = CLASSIC_OBSTACLES;
+
+  // ---- TETRIS map state (see the TETRIS section above applyMap) ----
+  let ACTIVE_MAP = 'crossfire';
+  const TETRIS_OBS = [];         // landed blocks as solid obstacles (rebuilt in place whenever the stack changes)
+  let TETRIS = null;             // deterministic falling-block simulation, shared by every client via the wall clock
+  const TT = { COLS:20, ROWS:20, CELL:75, TICK_MS:150, SPAWN_EVERY:6, CYCLE_TICKS:2000, FLASH_MS:500, HIT_DMG:40 };
+  const TT_TYPES = ['I','O','T','S','Z','J','L'];
+  const TT_COLORS = { I:'#22d3ee', O:'#facc15', T:'#a855f7', S:'#22c55e', Z:'#ef4444', J:'#3b82f6', L:'#f97316' };
+  let TT_ROT = null;
   let HAZARDS = [];              // active map's kill-zones (fortress' blue bunker floor), set by applyMap()
   const HAZARD_MS = 3000;        // time you can stand in a hazard zone before it kills you
 
@@ -3682,6 +3695,7 @@ function indexHtml() {
   }
 
   function update(dt){
+    if (ACTIVE_MAP === 'tetris') ttUpdate();
     updateRemoteSmoothing(dt);
     updateRemoteDrones(dt);
     if (state.alive) updateDrones(dt);
@@ -4009,7 +4023,7 @@ function indexHtml() {
     // obstacles
     bctx.fillStyle = pal.obstacleFill;
     bctx.strokeStyle = pal.obstacleStroke;
-    OBSTACLES.forEach(o=>{
+    (ACTIVE_MAP === 'tetris' ? [] : OBSTACLES).forEach(o=>{
       bctx.fillRect(o.x,o.y,o.w,o.h);
       bctx.strokeRect(o.x+0.5,o.y+0.5,o.w-1,o.h-1);
     });
@@ -4050,6 +4064,7 @@ function indexHtml() {
     ctx.translate(VIEW_W/2 - camX, VIEW_H/2 - camY);
 
     ctx.drawImage(bgCanvas, 0, 0);
+    if (ACTIVE_MAP === 'tetris') ttDraw(ctx);
 
     // other tanks
     peersIn(state.currentSector).forEach(p=>{
@@ -4449,9 +4464,322 @@ function indexHtml() {
     const m = getRoomMeta(sector);
     return m ? m.map : 'crossfire';
   }
+  // ---------------------------------------------------------------
+  // TETRIS map -- tetrominoes fall from the top of the arena, stack up
+  // and full lines vanish. Every client runs the SAME deterministic
+  // simulation (seeded PRNG + wall clock, restarted every CYCLE_TICKS)
+  // so everyone sees the same blocks without any network traffic.
+  // Landed blocks are solid walls (OBSTACLES), a block that is still
+  // falling hurts whoever it touches (once per block per tank).
+  // ---------------------------------------------------------------
+  function ttInit(){
+    if (TT_ROT) return;
+    const base = {
+      I:[[0,0],[1,0],[2,0],[3,0]],
+      O:[[0,0],[1,0],[0,1],[1,1]],
+      T:[[0,0],[1,0],[2,0],[1,1]],
+      S:[[1,0],[2,0],[0,1],[1,1]],
+      Z:[[0,0],[1,0],[1,1],[2,1]],
+      J:[[0,0],[0,1],[1,1],[2,1]],
+      L:[[2,0],[0,1],[1,1],[2,1]]
+    };
+    TT_ROT = {};
+    Object.keys(base).forEach(function(k){
+      let cells = base[k];
+      const seen = {}, list = [];
+      for (let r = 0; r < 4; r++){
+        const mx = Math.min.apply(null, cells.map(function(c){ return c[0]; }));
+        const my = Math.min.apply(null, cells.map(function(c){ return c[1]; }));
+        cells = cells.map(function(c){ return [c[0]-mx, c[1]-my]; });
+        const key = cells.map(function(c){ return c.join(','); }).sort().join(';');
+        if (!seen[key]){
+          seen[key] = 1;
+          list.push({
+            cells: cells,
+            w: Math.max.apply(null, cells.map(function(c){ return c[0]; })) + 1,
+            h: Math.max.apply(null, cells.map(function(c){ return c[1]; })) + 1
+          });
+        }
+        cells = cells.map(function(c){ return [-c[1], c[0]]; });
+      }
+      TT_ROT[k] = list;
+    });
+  }
+  function ttRng(a){
+    return function(){
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function ttEmptyBoard(){
+    const b = [];
+    for (let r = 0; r < TT.ROWS; r++) b.push(new Uint8Array(TT.COLS));
+    return b;
+  }
+  function ttNew(cyc){
+    ttInit();
+    return {
+      cycle: cyc, tick: 0, frac: 0, board: ttEmptyBoard(), pieces: [], nextId: 1,
+      rng: ttRng(Math.imul(cyc, 0x9E3779B1) ^ 0x85EBCA6B), bag: [], flashes: [], dirty: true, hit: {}
+    };
+  }
+  function ttCycleStart(T){ return T.cycle * TT.CYCLE_TICKS * TT.TICK_MS; }
+  function ttFits(board, cells, col, row){
+    for (let i = 0; i < 4; i++){
+      const x = col + cells[i][0], y = row + cells[i][1];
+      if (x < 0 || x >= TT.COLS || y >= TT.ROWS) return false;
+      if (y >= 0 && board[y][x]) return false;
+    }
+    return true;
+  }
+  function ttDropFrom(board, cells, col, row){
+    while (ttFits(board, cells, col, row + 1)) row++;
+    return row;
+  }
+  // Score a candidate placement (classic height / lines / holes / bumpiness heuristic)
+  // so the falling pieces keep building and clearing lines on their own.
+  function ttEval(board, rot, col, row, ti){
+    const rows = board.map(function(r){ return r.slice(); });
+    for (let i = 0; i < 4; i++){
+      const y = row + rot.cells[i][1];
+      if (y < 0) return -1e9;
+      rows[y][col + rot.cells[i][0]] = ti + 1;
+    }
+    let lines = 0;
+    const keep = [];
+    for (let r = 0; r < TT.ROWS; r++){
+      let full = true;
+      for (let c = 0; c < TT.COLS; c++) if (!rows[r][c]){ full = false; break; }
+      if (full) lines++; else keep.push(rows[r]);
+    }
+    const pad = TT.ROWS - keep.length;
+    const heights = [];
+    let holes = 0, agg = 0, bump = 0;
+    for (let c = 0; c < TT.COLS; c++){
+      let h = 0, seen = false;
+      for (let i = 0; i < keep.length; i++){
+        if (keep[i][c]){ if (!seen){ seen = true; h = TT.ROWS - (pad + i); } }
+        else if (seen) holes++;
+      }
+      heights.push(h); agg += h;
+    }
+    for (let c = 1; c < TT.COLS; c++) bump += Math.abs(heights[c] - heights[c-1]);
+    return -0.51 * agg + 0.76 * lines - 0.36 * holes - 0.18 * bump;
+  }
+  function ttReset(T, t){
+    T.board = ttEmptyBoard();
+    for (let r = 0; r < TT.ROWS; r++) T.flashes.push({ row: r, t: t });
+    T.dirty = true;
+  }
+  function ttSpawn(T){
+    if (!T.bag.length){
+      const b = [0,1,2,3,4,5,6];
+      for (let i = 6; i > 0; i--){ const j = Math.floor(T.rng() * (i + 1)); const t = b[i]; b[i] = b[j]; b[j] = t; }
+      T.bag = b;
+    }
+    const ti = T.bag.pop(), type = TT_TYPES[ti], rots = TT_ROT[type];
+    // plan around blocks that are still in the air: pretend they have already landed
+    const plan = T.board.map(function(r){ return r.slice(); });
+    T.pieces.forEach(function(p){
+      const gr = ttDropFrom(plan, p.cells, p.col, p.row);
+      p.cells.forEach(function(c){ const y = gr + c[1]; if (y >= 0) plan[y][p.col + c[0]] = p.type + 1; });
+    });
+    let best = null, bestS = -1e18;
+    rots.forEach(function(rot){
+      for (let col = 0; col <= TT.COLS - rot.w; col++){
+        const row = ttDropFrom(plan, rot.cells, col, -rot.h);
+        const s = ttEval(plan, rot, col, row, ti) + T.rng() * 0.5;
+        if (s > bestS){ bestS = s; best = { rot: rot, col: col }; }
+      }
+    });
+    if (!best){
+      ttReset(T, ttCycleStart(T) + T.tick * TT.TICK_MS);
+      best = { rot: rots[0], col: Math.floor((TT.COLS - rots[0].w) / 2) };
+    }
+    T.pieces.push({ id: T.nextId++, type: ti, cells: best.rot.cells, col: best.col, row: -best.rot.h });
+  }
+  function ttClearLines(T){
+    const keep = [], cleared = [];
+    for (let r = 0; r < TT.ROWS; r++){
+      let full = true;
+      for (let c = 0; c < TT.COLS; c++) if (!T.board[r][c]){ full = false; break; }
+      if (full) cleared.push(r); else keep.push(T.board[r]);
+    }
+    if (!cleared.length) return;
+    while (keep.length < TT.ROWS) keep.unshift(new Uint8Array(TT.COLS));
+    T.board = keep;
+    const t = ttCycleStart(T) + T.tick * TT.TICK_MS;
+    cleared.forEach(function(r){ T.flashes.push({ row: r, t: t }); });
+    T.dirty = true;
+  }
+  function ttStep(T){
+    if (T.tick % TT.SPAWN_EVERY === 0) ttSpawn(T);
+    const locked = [];
+    T.pieces.forEach(function(p){
+      if (ttFits(T.board, p.cells, p.col, p.row + 1)) p.row++;
+      else locked.push(p);
+    });
+    if (locked.length){
+      let overflow = false;
+      locked.forEach(function(p){
+        p.cells.forEach(function(c){
+          const y = p.row + c[1];
+          if (y < 0) overflow = true; else T.board[y][p.col + c[0]] = p.type + 1;
+        });
+        delete T.hit[p.id];
+      });
+      T.pieces = T.pieces.filter(function(p){ return locked.indexOf(p) < 0; });
+      T.dirty = true;
+      if (overflow) ttReset(T, ttCycleStart(T) + T.tick * TT.TICK_MS);
+      else ttClearLines(T);
+    }
+    T.tick++;
+  }
+  function ttRebuildObstacles(T){
+    TETRIS_OBS.length = 0;
+    for (let r = 0; r < TT.ROWS; r++){
+      let c = 0;
+      while (c < TT.COLS){
+        if (T.board[r][c]){
+          const s = c;
+          while (c < TT.COLS && T.board[r][c]) c++;
+          TETRIS_OBS.push({ x: s * TT.CELL, y: r * TT.CELL, w: (c - s) * TT.CELL, h: TT.CELL });
+        } else c++;
+      }
+    }
+  }
+  function ttSync(){
+    const now = Date.now(), cycMs = TT.CYCLE_TICKS * TT.TICK_MS, cyc = Math.floor(now / cycMs);
+    if (!TETRIS || TETRIS.cycle !== cyc) TETRIS = ttNew(cyc);
+    const T = TETRIS, pos = (now - cyc * cycMs) / TT.TICK_MS, target = Math.floor(pos);
+    while (T.tick < target) ttStep(T);
+    T.frac = pos - target;
+    if (T.flashes.length) T.flashes = T.flashes.filter(function(f){ return now - f.t < TT.FLASH_MS; });
+    if (T.dirty){ ttRebuildObstacles(T); T.dirty = false; }
+    return T;
+  }
+  function ttPieceY(T, p){
+    return (p.row + (ttFits(T.board, p.cells, p.col, p.row + 1) ? T.frac : 0)) * TT.CELL;
+  }
+  function ttUnstick(){
+    const ox = state.x, oy = state.y;
+    for (let rad = 8; rad <= 900; rad += 8){
+      for (let k = 0; k < 24; k++){
+        const a = k / 24 * Math.PI * 2;
+        const nx = ox + Math.cos(a) * rad, ny = oy + Math.sin(a) * rad;
+        if (canOccupy(nx, ny)){ state.x = nx; state.y = ny; return; }
+      }
+    }
+    const sp = SPAWNS[0]; state.x = sp.x; state.y = sp.y;
+  }
+  // Runs every frame while in a Tetris room: advances the shared simulation,
+  // hurts you if a falling block touches you, and frees you if a landing
+  // block / line-clear shift buried you.
+  function ttUpdate(){
+    const T = ttSync();
+    if (!state.alive) return;
+    const now = performance.now();
+    if (!canOccupy(state.x, state.y)){
+      ttUnstick();
+      if (now - (state.ttHitAt || 0) > 1500){
+        state.ttHitAt = now;
+        applyDamage(null, 'A TETRIS BLOCK', TT.HIT_DMG);
+      }
+      if (!state.alive) return;
+    }
+    for (let i = 0; i < T.pieces.length; i++){
+      const p = T.pieces[i];
+      if (T.hit[p.id]) continue;
+      const py = ttPieceY(T, p);
+      for (let k = 0; k < 4; k++){
+        const rect = { x: (p.col + p.cells[k][0]) * TT.CELL, y: py + p.cells[k][1] * TT.CELL, w: TT.CELL, h: TT.CELL };
+        if (rectCircleCollide(state.x, state.y, TANK_R, rect)){
+          T.hit[p.id] = 1;
+          state.ttHitAt = now;
+          applyDamage(null, 'A TETRIS BLOCK', TT.HIT_DMG);
+          return;
+        }
+      }
+    }
+  }
+  function ttCell(c, x, y, color){
+    const s = TT.CELL;
+    c.fillStyle = color;
+    c.fillRect(x + 1, y + 1, s - 2, s - 2);
+    c.fillStyle = 'rgba(255,255,255,0.28)';
+    c.fillRect(x + 4, y + 4, s - 8, 8);
+    c.fillStyle = 'rgba(0,0,0,0.20)';
+    c.fillRect(x + 1, y + s - 11, s - 2, 10);
+    c.strokeStyle = 'rgba(0,0,0,0.45)';
+    c.lineWidth = 2;
+    c.strokeRect(x + 2, y + 2, s - 4, s - 4);
+  }
+  function ttDraw(c){
+    const T = TETRIS;
+    if (!T) return;
+    const s = TT.CELL;
+    // landing-spot warnings under every falling block
+    c.save();
+    c.setLineDash([8, 6]);
+    c.lineWidth = 2;
+    T.pieces.forEach(function(p){
+      const gr = ttDropFrom(T.board, p.cells, p.col, p.row);
+      const col = TT_COLORS[TT_TYPES[p.type]];
+      c.fillStyle = 'rgba(255,255,255,0.07)';
+      c.strokeStyle = col;
+      c.globalAlpha = 0.55;
+      p.cells.forEach(function(k){
+        const x = (p.col + k[0]) * s, y = (gr + k[1]) * s;
+        if (y < -s) return;
+        c.fillRect(x, y, s, s);
+        c.strokeRect(x + 1, y + 1, s - 2, s - 2);
+      });
+    });
+    c.restore();
+    // landed blocks
+    for (let r = 0; r < TT.ROWS; r++){
+      const row = T.board[r];
+      for (let k = 0; k < TT.COLS; k++){
+        const v = row[k];
+        if (v) ttCell(c, k * s, r * s, TT_COLORS[TT_TYPES[v - 1]]);
+      }
+    }
+    // falling blocks (bright outline = dangerous)
+    T.pieces.forEach(function(p){
+      const py = ttPieceY(T, p), col = TT_COLORS[TT_TYPES[p.type]];
+      p.cells.forEach(function(k){
+        const x = (p.col + k[0]) * s, y = py + k[1] * s;
+        if (y < -s) return;
+        ttCell(c, x, y, col);
+        c.strokeStyle = 'rgba(255,255,255,0.9)';
+        c.lineWidth = 3;
+        c.strokeRect(x + 3, y + 3, s - 6, s - 6);
+      });
+    });
+    // line-clear flash
+    if (T.flashes.length){
+      const now = Date.now();
+      T.flashes.forEach(function(f){
+        const a = 1 - (now - f.t) / TT.FLASH_MS;
+        if (a <= 0) return;
+        c.fillStyle = 'rgba(255,255,255,' + (0.75 * a).toFixed(3) + ')';
+        c.fillRect(0, f.row * s, TT.COLS * s, s);
+      });
+    }
+  }
+
   function applyMap(id){
-    OBSTACLES = (MAPS[id] || MAPS.crossfire).obstacles;
-    HAZARDS = (MAPS[id] || MAPS.crossfire).hazards || [];
+    ACTIVE_MAP = id;
+    if (id === 'tetris'){
+      TETRIS = null; TETRIS_OBS.length = 0;
+      OBSTACLES = TETRIS_OBS; HAZARDS = [];
+      ttSync();
+    } else {
+      OBSTACLES = (MAPS[id] || MAPS.crossfire).obstacles;
+      HAZARDS = (MAPS[id] || MAPS.crossfire).hazards || [];
+    }
     invalidateBackground();
   }
   function hostedRooms(){
@@ -4530,6 +4858,7 @@ function indexHtml() {
     }
     c.fillStyle = state.settings.theme === 'light' ? '#8f8f8f' : 'rgba(170,170,170,0.6)';
     MAPS[id].obstacles.forEach(o=>c.fillRect(o.x*k, o.y*k, Math.max(2,o.w*k), Math.max(2,o.h*k)));
+    if (MAPS[id].colored) MAPS[id].colored.forEach(b=>{ c.fillStyle = b[4]; c.fillRect(b[0]*k, b[1]*k, Math.max(2,b[2]*k), Math.max(2,b[3]*k)); });
   }
   function refreshHostUI(){
     byId('hostMapName').textContent = MAPS[hostDraft.map].name;
