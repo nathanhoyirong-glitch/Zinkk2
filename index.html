@@ -1440,6 +1440,9 @@
     maze: { name:'MAZE', desc:'Tight corridors, dead ends and loops', obstacles:[
       {x:152,y:318,w:30,h:197},{x:152,y:818,w:30,h:364},{x:318,y:485,w:30,h:363},{x:318,y:985,w:30,h:363},{x:485,y:652,w:30,h:363},{x:485,y:1318,w:30,h:182},{x:652,y:152,w:30,h:363},{x:652,y:652,w:30,h:196},{x:652,y:1152,w:30,h:196},{x:818,y:152,w:30,h:196},{x:818,y:485,w:30,h:197},{x:818,y:985,w:30,h:363},{x:985,y:818,w:30,h:364},{x:1152,y:985,w:30,h:197},{x:1318,y:152,w:30,h:196},{x:1318,y:1152,w:30,h:196},{x:152,y:152,w:530,h:30},{x:152,y:318,w:196,h:30},{x:818,y:318,w:197,h:30},{x:1318,y:318,w:182,h:30},{x:652,y:485,w:363,h:30},{x:1152,y:485,w:196,h:30},{x:0,y:652,w:182,h:30},{x:485,y:652,w:363,h:30},{x:985,y:652,w:363,h:30},{x:818,y:818,w:197,h:30},{x:1152,y:818,w:348,h:30},{x:652,y:985,w:196,h:30},{x:1152,y:985,w:196,h:30},{x:0,y:1152,w:182,h:30},{x:485,y:1152,w:197,h:30},{x:985,y:1152,w:197,h:30},{x:1318,y:1152,w:182,h:30},{x:152,y:1318,w:196,h:30},{x:818,y:1318,w:530,h:30}
     ] },
+    deadends: { name:'DEAD ENDS', desc:'Alleys run from every edge to a dead end, all linked through a central room', obstacles:[
+      {x:510,y:0,w:30,h:390},{x:510,y:1110,w:30,h:390},{x:660,y:0,w:30,h:390},{x:660,y:1110,w:30,h:390},{x:810,y:0,w:30,h:390},{x:810,y:1110,w:30,h:390},{x:960,y:0,w:30,h:390},{x:960,y:1110,w:30,h:390},{x:0,y:510,w:390,h:30},{x:1110,y:510,w:390,h:30},{x:0,y:660,w:390,h:30},{x:1110,y:660,w:390,h:30},{x:0,y:810,w:390,h:30},{x:1110,y:810,w:390,h:30},{x:0,y:960,w:390,h:30},{x:1110,y:960,w:390,h:30},{x:240,y:0,w:30,h:210},{x:1230,y:0,w:30,h:210},{x:240,y:1290,w:30,h:210},{x:1230,y:1290,w:30,h:210},{x:570,y:570,w:120,h:30},{x:810,y:570,w:120,h:30},{x:570,y:900,w:120,h:30},{x:810,y:900,w:120,h:30},{x:570,y:570,w:30,h:120},{x:570,y:810,w:30,h:120},{x:900,y:570,w:30,h:120},{x:900,y:810,w:30,h:120},{x:720,y:720,w:60,h:60},{x:330,y:330,w:60,h:60},{x:1110,y:330,w:60,h:60},{x:330,y:1110,w:60,h:60},{x:1110,y:1110,w:60,h:60}
+    ] },
     tetris: { name:'TETRIS', desc:'Blocks rain down and vanish on landing. Shoot them or get hit.', obstacles:[],
       colored:[[0,1350,300,75,'#22d3ee'],[300,1425,150,75,'#facc15'],[450,1350,225,75,'#a855f7'],[675,1425,225,75,'#22c55e'],
                [900,1350,225,75,'#3b82f6'],[1125,1425,225,75,'#f97316'],[1350,1350,150,150,'#ef4444'],
@@ -1463,7 +1466,7 @@
   const HOST_CAPS = [2,4,6,8,9,10];   // 9 is only offered for Showdown TRIO (3 teams of 3)
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdFmt:'solo' };   // sdFmt: 'solo' | 'duo' | 'trio'
-  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze'];
+  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze','deadends'];
   let OBSTACLES = CLASSIC_OBSTACLES;
 
   // ---- TETRIS map state (see the TETRIS section above applyMap) ----
@@ -2324,7 +2327,13 @@
     setupStatsPanel();
     renderStatsPanel();
     state.lastFrame = performance.now();
-    if (state.roomMode === 'showdown') sdInit(); else state.sd = null;
+    if (state.roomMode === 'showdown') sdInit();
+    else {
+      state.sd = null;
+      const sp = pickSpawnPoint();       // a different part of the map each time
+      state.x = sp.x; state.y = sp.y;
+      state.room.presence({ x: state.x, y: state.y });
+    }
     requestAnimationFrame(loop);
     renderScoreStrip();
   }
@@ -3445,10 +3454,73 @@
     }
   }
 
+  // ---------------------------------------------------------------
+  // Spawn points spread over the WHOLE map (not just the 8 edge spots).
+  // Built once per map from every clear, reachable spot, thinned so points are far apart.
+  // Deterministic, so every client computes the identical list.
+  // ---------------------------------------------------------------
+  let SPAWN_CACHE = { map: null, pts: null };
+  function mapSpawnPoints(){
+    if (ACTIVE_MAP === 'tetris') return SPAWNS;               // blocks move around -- keep the safe fixed spots
+    if (SPAWN_CACHE.map === ACTIVE_MAP && SPAWN_CACHE.pts) return SPAWN_CACHE.pts;
+    const STEP = 15, N = Math.floor(ARENA_W / STEP), M = TANK_R + 14;
+    const clear = (x, y) => {
+      if (x < M || y < M || x > ARENA_W - M || y > ARENA_H - M) return false;
+      for (const o of OBSTACLES) if (rectCircleCollide(x, y, M, o)) return false;
+      for (const h of HAZARDS) if (x > h.x - 30 && x < h.x + h.w + 30 && y > h.y - 30 && y < h.y + h.h + 30) return false;
+      return true;
+    };
+    // flood fill from a known-good spawn so we never pick a sealed-off pocket
+    let seed = null;
+    for (const sp of SPAWNS){ const i = Math.round(sp.x / STEP), j = Math.round(sp.y / STEP); if (clear(i * STEP, j * STEP)){ seed = [i, j]; break; } }
+    const cells = [];
+    if (seed){
+      const seen = new Uint8Array((N + 1) * (N + 1)), q = [seed];
+      seen[seed[1] * (N + 1) + seed[0]] = 1;
+      while (q.length){
+        const [i, j] = q.pop(); cells.push([i * STEP, j * STEP]);
+        for (const [di, dj] of [[1,0],[-1,0],[0,1],[0,-1]]){
+          const a = i + di, b = j + dj;
+          if (a < 0 || b < 0 || a > N || b > N || seen[b * (N + 1) + a]) continue;
+          if (!clear(a * STEP, b * STEP)) continue;
+          seen[b * (N + 1) + a] = 1; q.push([a, b]);
+        }
+      }
+    }
+    let pts = [];
+    const rng = ttRng(0x51A9E5);
+    for (let k = cells.length - 1; k > 0; k--){ const r = Math.floor(rng() * (k + 1)); [cells[k], cells[r]] = [cells[r], cells[k]]; }
+    for (const [x, y] of cells){ if (pts.every(p => Math.hypot(p.x - x, p.y - y) >= 230)) pts.push({ x, y }); }
+    if (pts.length < 8) pts = SPAWNS.slice();
+    SPAWN_CACHE = { map: ACTIVE_MAP, pts };
+    return pts;
+  }
+  // random spawn that keeps away from living players; CTF keeps the classic spots (flags sit on them)
+  function pickSpawnPoint(){
+    const pts = state.roomMode === 'ctf' ? SPAWNS : mapSpawnPoints();
+    const foes = state.currentSector ? peersIn(state.currentSector).filter(p => !p.isMe && p.presence.alive !== false && p.presence.x !== undefined) : [];
+    const dist = pt => foes.length ? Math.min(...foes.map(p => Math.hypot(p.presence.x - pt.x, p.presence.y - pt.y))) : 9999;
+    const far = pts.filter(pt => dist(pt) >= 450);
+    if (far.length) return far[Math.floor(Math.random() * far.length)];
+    return pts.reduce((best, pt) => dist(pt) > dist(best) ? pt : best, pts[0]);
+  }
+  // Showdown start: farthest-point ordering, shared seed -> everyone gets a different, well-spread spot
+  function sdSpreadSpawn(k){
+    const pts = mapSpawnPoints().slice();
+    const rng = ttRng(sdHash(String(state.currentSector)) ^ 0x7777);
+    const order = [pts.splice(Math.floor(rng() * pts.length), 1)[0]];
+    while (pts.length){
+      let bi = 0, bd = -1;
+      pts.forEach((p, i) => { const d = Math.min(...order.map(o => Math.hypot(o.x - p.x, o.y - p.y))); if (d > bd){ bd = d; bi = i; } });
+      order.push(pts.splice(bi, 1)[0]);
+    }
+    return order[k % order.length];
+  }
+
   function respawn(){
     if (!state.currentSector || state.alive) return; // left the room (or already back) while dead
     if (state.roomMode === 'showdown') return;        // eliminated players stay out
-    const spawn = SPAWNS[Math.floor(Math.random()*SPAWNS.length)];
+    const spawn = pickSpawnPoint();
     state.x = spawn.x; state.y = spawn.y; state.hp = effectiveMaxHp(); state.alive = true;
     state.invincibleUntil = performance.now() + SPAWN_PROTECT_MS;
     state.zoneEnteredAt = null;
@@ -3526,7 +3598,7 @@
     let spawn;
     {
       const k = Math.max(0, list.findIndex(p => p.isMe));
-      spawn = sdPickSpawn(k, SPAWNS);
+      spawn = sdSpreadSpawn(k);
     }
     state.x = spawn.x; state.y = spawn.y;
     state.turretAngle = Math.atan2(ARENA_H / 2 - spawn.y, ARENA_W / 2 - spawn.x);
