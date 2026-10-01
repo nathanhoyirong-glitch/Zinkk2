@@ -1460,9 +1460,9 @@
     ] },
   };
 
-  const HOST_CAPS = [2,4,6,8,10];
+  const HOST_CAPS = [2,4,6,8,9,10];   // 9 is only offered for Showdown TRIO (3 teams of 3)
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdTeams:false };
+  const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdFmt:'solo' };   // sdFmt: 'solo' | 'duo' | 'trio'
   const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze'];
   let OBSTACLES = CLASSIC_OBSTACLES;
 
@@ -1486,9 +1486,11 @@
     { id:'ffa',   label:'FFA',          desc:'Every tank for itself.' },
     { id:'teams', label:'2 TEAMS',      desc:'Red vs Blue. No friendly fire; team score = combined kills.' },
     { id:'ctf',   label:'CAPTURE FLAG', desc:'Red vs Blue. Steal the enemy flag and bring it to your base to score.' },
-    { id:'showdown', label:'SHOWDOWN',  desc:'Last team or player standing wins. No respawns. Poison smoke clouds close in from all four walls and break crates open to drop +HP. Shoot crates for upgrades (1 crate = 2 kills, lucky = 3).' },
+    { id:'showdown', label:'SHOWDOWN',  desc:'Last team or player standing wins. No respawns. Solo, DUO or TRIO. Poison smoke clouds close in from all four walls and break crates open to drop +HP. Shoot crates for upgrades (1 crate = 2 kills, lucky = 3). In duo/trio a downed player respawns behind a living teammate after 10s; the whole team down = out.' },
   ];
   const TEAM_IDS = ['red','blue'];
+  const SD_TEAM_IDS = ['red','blue','green','amber','purple'];   // Showdown duo (up to 5 teams) / trio (up to 3 teams)
+  function sdSizeOfMeta(meta){ return !meta || !meta.teams ? 0 : (meta.teams === 'trio' ? 3 : 2); }
   // Showdown tuning. Maps listed here can't be picked for a Showdown room (the two Tetris maps).
   const SD_BLOCKED_MAPS = ['tetris', 'grid'];
   const SD = {
@@ -1496,12 +1498,13 @@
     SHRINK_PX_S: 3.2,       // how fast each wall's smoke creeps inward (px/sec); ~4 min until it meets in the middle
     HEAL_AMOUNT: 25,        // HP restored by a health pickup dropped when smoke breaks a crate
     PICKUP_R: 30,
+    TEAM_RESPAWN_MS: 10000, // duo / trio: a downed player returns this long after dying (if a teammate is still alive)
     TICK_MS: 1000,          // poison stings once per tick...
     POISON_DMG: 10,         // ...for this much HP
     CHESTS_BASE: 6,         // chests on the map = this + max players
     CHEST_HP: 100, CHEST_R: 26, CHEST_GAP: 230,
     LUCKY_CHANCE: 0.25,     // chance a chest pays 3 instead of 2
-    CLOUD_GAP: 120,         // minimum spacing between smoke clouds (px) -- keeps them separate, not clumped
+    CLOUD_GAP: 75,          // minimum spacing between smoke clouds (px) -- keeps them separate, not clumped
   };
   const MIN_HOST_START_PLAYERS = 2; // hosted rooms need this many joined before the host can hit START
 
@@ -1563,7 +1566,7 @@
     currentSector: null, // 'A' | 'B' | null
     waitingToStart: false, // true while sitting in a hosted room's pre-start lobby
     roomMode: null,       // 'ffa' | 'teams' | 'ctf' (only meaningful while currentSector is set)
-    sd: null, sdOut: false, sdTeams: false, unsubSd: null,   // Showdown runtime
+    sd: null, sdOut: false, sdTeams: false, sdTeamSize: 0, unsubSd: null,   // Showdown runtime
     team: null,           // 'red' | 'blue' | null -- assigned on join in team modes, forced FFA otherwise
     carrying: null,       // 'red' | 'blue' | null -- which flag I'm currently carrying (CTF)
     captures: 0,          // my flag captures this room stay
@@ -2226,7 +2229,7 @@
     let team = null;
     if (teamMode){
       // team modes: hull color IS the team color, assigned to balance sides
-      team = assignTeam(sector);
+      team = assignTeam(sector, meta);
       color = teamPaletteColor(team);
     }
     // FFA: the hull is always exactly the color the player picked, even if
@@ -2297,7 +2300,7 @@
     applyMap(mapOfSector(sector));
     state.currentSector = sector;
     state.roomMode = modeOfSector(sector);
-    { const m = getRoomMeta(sector); state.sdTeams = !!(m && m.mode === 'showdown' && m.teams); }
+    { const m = getRoomMeta(sector); state.sdTeams = !!(m && m.mode === 'showdown' && m.teams); state.sdTeamSize = state.sdTeams ? sdSizeOfMeta(m) : 0; }
     byId('hudRoomName').textContent = roomLabel(sector);
     byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
     switchScreen('screen-game');
@@ -2369,8 +2372,9 @@
     const startBtn = byId('waitStartBtn');
     const statusEl = byId('waitStatus');
     const sdRoom = !!(meta && meta.mode === 'showdown');
-    const sdOdd = sdRoom && (list.length % 2 !== 0);
-    const oddMsg = 'Showdown needs an EVEN number of players (' + list.length + ' joined) \u2014 wait for one more.';
+    const sdProblem = sdRoom ? sdCountProblem(list.length, meta) : '';
+    const sdOdd = !!sdProblem;
+    const oddMsg = sdProblem;
     if (iAmHost){
       if (list.length < MIN_HOST_START_PLAYERS){
         startBtn.style.display = 'none';
@@ -2398,7 +2402,7 @@
   byId('waitStartBtn').addEventListener('click', ()=>{
     if (!state.waitingToStart || !state.currentSector) return;
     const meta = getRoomMeta(state.currentSector) || normMeta(null);
-    if (meta.mode === 'showdown' && peersIn(state.currentSector).length % 2 !== 0){ showToast('Showdown needs an even number of players.'); return; }
+    if (meta.mode === 'showdown'){ const prob = sdCountProblem(peersIn(state.currentSector).length, meta); if (prob){ showToast(prob); return; } }
     state.room.presence({ roomMeta: Object.assign({}, meta, { started: true }) });
   });
   byId('waitLeaveBtn').addEventListener('click', leaveSector);
@@ -2687,7 +2691,7 @@
     }
 
     if (state.roomMode === 'teams' || state.roomMode === 'ctf' || (state.roomMode === 'showdown' && state.sdTeams)){
-      TEAM_IDS.forEach(team=>{
+      (state.roomMode === 'showdown' ? SD_TEAM_IDS : TEAM_IDS).forEach(team=>{
         const members = peersIn(state.currentSector).filter(p=>p.presence.team===team)
           .sort((a,b)=>(b.presence.score||0)-(a.presence.score||0));
         if (!members.length) return;
@@ -3428,7 +3432,15 @@
         x: state.x, y: state.y, roomId: state.currentSector
       });
       spawnSpark(state.x, state.y, state.color.hex, 1);
-      if (state.roomMode === 'showdown'){ state.sdOut = true; }   // Showdown: no respawns -- you're out
+      if (state.roomMode === 'showdown'){
+        // solo: out for good. Duo / trio: if a teammate is still alive you come back in 10s, otherwise your team has lost.
+        if (state.sd && state.sdTeamSize > 0 && !state.sd.over && sdMatesAlive().length){
+          state.sdOut = false; state.sd.respawnAt = performance.now() + SD.TEAM_RESPAWN_MS; state.sd.specId = null;
+          showToast('DOWN \u2014 respawning behind a teammate in ' + Math.round(SD.TEAM_RESPAWN_MS / 1000) + 's');
+        } else {
+          state.sdOut = true; if (state.sd) state.sd.respawnAt = 0;
+        }
+      }
       else setTimeout(respawn, RESPAWN_MS);
     }
   }
@@ -3486,7 +3498,7 @@
       if (clouds.some(c => Math.hypot(c.x - x, c.y - y) < SD.CLOUD_GAP)) continue;
       clouds.push({
         x, y, e: Math.max(0, Math.min(x, ARENA_W - x, y, ARENA_H - y)),   // distance to the nearest wall
-        s: 0.85 + rng() * 0.45, v: Math.floor(rng() * 4), ph: rng() * 6.283
+        s: 0.7 + rng() * 0.3, v: Math.floor(rng() * 4), ph: rng() * 6.283
       });
     }
     clouds.sort((p, q) => p.y - q.y);   // lower clouds paint over higher ones
@@ -3512,11 +3524,7 @@
   function sdPlaceAtStart(){
     const list = peersIn(state.currentSector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
     let spawn;
-    if (state.sdTeams && state.team){
-      const mates = list.filter(p => (p.isMe ? state.team : p.presence.team) === state.team);
-      const k = Math.max(0, mates.findIndex(p => p.isMe));
-      spawn = sdPickSpawn(k, SD_TEAM_SPAWNS[state.team] || SPAWNS);
-    } else {
+    {
       const k = Math.max(0, list.findIndex(p => p.isMe));
       spawn = sdPickSpawn(k, SPAWNS);
     }
@@ -3530,7 +3538,7 @@
     state.sd = {
       startedAt: performance.now(), over: false, poisonAcc: 0, inSmoke: false, warned: false,
       chests: sdBuildChests(sector, meta.cap), clouds: sdBuildCloudField(sector), pickups: [],
-      specId: null, lastCheck: 0, lastHud: 0,
+      specId: null, lastCheck: 0, lastHud: 0, respawnAt: 0,
     };
     state.sdOut = false;
     sdPlaceAtStart();
@@ -3627,11 +3635,45 @@
     }
   }
 
+  // ---- duo / trio respawn: appear just behind a surviving teammate (opposite to where their turret points) ----
+  function sdRespawnBehindMate(mates){
+    const sd = state.sd;
+    const mate = mates.find(p => p.peer === sd.specId) || mates[0];
+    const sm = state.remoteSmooth[mate.peer];
+    const mx = sm ? sm.x : mate.presence.x, my = sm ? sm.y : mate.presence.y;
+    const face = sm ? sm.angle : (mate.presence.turretAngle || 0);
+    let px = mx, py = my, found = false;
+    for (const dist of [70, 55, 90, 110]){
+      for (const da of [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.4, -2.4]){
+        const a = face + Math.PI + da;
+        const x = mx + Math.cos(a) * dist, y = my + Math.sin(a) * dist;
+        if (x < 20 || y < 20 || x > ARENA_W - 20 || y > ARENA_H - 20) continue;
+        if (canOccupy(x, y)){ px = x; py = y; found = true; break; }
+      }
+      if (found) break;
+    }
+    state.x = px; state.y = py; state.turretAngle = face;
+    state.hp = effectiveMaxHp(); state.alive = true; state.sdOut = false;
+    state.invincibleUntil = performance.now() + SPAWN_PROTECT_MS;
+    state.zoneEnteredAt = null;
+    sd.respawnAt = 0; sd.specId = null;
+    byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
+    state.room.presence({ x: state.x, y: state.y, turretAngle: state.turretAngle, hp: state.hp, maxHp: effectiveMaxHp(), alive: true });
+    byId('sdSpec').classList.remove('show');
+    showToast('RESPAWNED BEHIND ' + nameLabel(mate.peer, state.currentSector));
+  }
+
   // ---- per-frame: poison, chest resolution, win check ----
   function sdUpdate(dt){
     const sd = state.sd; if (!sd) return;
     const now = performance.now();
     sdHostResolve();
+    // duo / trio: downed player returns behind a living teammate; if the whole team is down they're out
+    if (!state.alive && sd.respawnAt && !sd.over){
+      const mates = sdMatesAlive();
+      if (!mates.length){ sd.respawnAt = 0; state.sdOut = true; showToast('Your whole team is down \u2014 eliminated.'); }
+      else if (now >= sd.respawnAt) sdRespawnBehindMate(mates);
+    }
     if (!sd.warned && now - sd.startedAt >= SD.GRACE_MS){ sd.warned = true; showToast('POISON SMOKE IS CLOSING IN!'); }
 
     // health pickups: walk over one to grab it (first to touch it wins)
@@ -3670,7 +3712,7 @@
       poisonEl.textContent = ''; poisonEl.classList.remove('low');
     }
 
-    if (now - sd.lastCheck > 300){
+    if (now - sd.lastCheck > (sd.respawnAt ? 200 : 300)){
       sd.lastCheck = now;
       sdUpdateSpectateBar();
       if (!sd.over && now - sd.startedAt > 2500) sdCheckWinner();
@@ -3681,6 +3723,19 @@
     return peersIn(state.currentSector).filter(p => p.isMe ? state.alive : p.presence.alive !== false);
   }
   function sdTeamOf(p){ return p.isMe ? state.team : p.presence.team; }
+  // is the lobby head-count OK to start? returns '' or a message
+  function sdCountProblem(n, meta){
+    const size = sdSizeOfMeta(meta);
+    if (!size) return n % 2 !== 0 ? 'Showdown needs an EVEN number of players (' + n + ' joined) \u2014 wait for one more.' : '';
+    if (n < size * 2) return (size === 2 ? 'Duo' : 'Trio') + ' needs at least ' + (size * 2) + ' players (' + n + ' joined).';
+    if (n % size !== 0) return 'Teams must be full \u2014 ' + size + ' per team (' + n + ' joined). Wait for ' + (size - n % size) + ' more.';
+    return '';
+  }
+  // teammates (not me) still alive
+  function sdMatesAlive(){
+    if (!state.team) return [];
+    return peersIn(state.currentSector).filter(p => !p.isMe && p.presence.team === state.team && p.presence.alive !== false && p.presence.x !== undefined);
+  }
 
   function sdCheckWinner(){
     const sd = state.sd;
@@ -3746,7 +3801,10 @@
     const bar = byId('sdSpec');
     if (!state.sd || state.alive || state.sd.over){ bar.classList.remove('show'); return; }
     const t = sdSpectateTarget();
-    byId('sdSpecText').textContent = t ? ('ELIMINATED \u2014 WATCHING ' + t.name) : 'ELIMINATED';
+    const wait = state.sd.respawnAt ? Math.max(0, Math.ceil((state.sd.respawnAt - performance.now()) / 1000)) : 0;
+    byId('sdSpecText').textContent = wait
+      ? ('DOWN \u2014 RESPAWN IN ' + wait + 's' + (t ? ' \u00b7 WATCHING ' + t.name : ''))
+      : (t ? ('ELIMINATED \u2014 WATCHING ' + t.name) : 'ELIMINATED');
     byId('sdSpecNext').style.display = t ? '' : 'none';
     bar.classList.add('show');
   }
@@ -3758,8 +3816,9 @@
     const alive = sdAlivePeers();
     let who;
     if (state.sdTeams){
-      const r = alive.filter(p => sdTeamOf(p) === 'red').length, b = alive.filter(p => sdTeamOf(p) === 'blue').length;
-      who = 'RED ' + r + ' \u00b7 BLUE ' + b + ' ALIVE';
+      const teamsLeft = new Set(alive.map(sdTeamOf)).size;
+      const mine = alive.filter(p => sdTeamOf(p) === state.team).length;
+      who = 'YOUR TEAM ' + mine + '/' + state.sdTeamSize + ' \u00b7 ' + teamsLeft + ' TEAMS LEFT';
     } else who = alive.length + ' ALIVE';
     const el = performance.now() - sd.startedAt;
     if (el < SD.GRACE_MS) return { text: who + ' \u00b7 SMOKE IN ' + fmtClock(SD.GRACE_MS - el), low: false };
@@ -3867,14 +3926,14 @@
     c.fillStyle = 'rgba(160,215,110,0.16)'; c.fill('evenodd');
     // separate clouds, popping in as the front sweeps past them
     const x0 = camX - VIEW_W / 2 - 160, x1 = camX + VIEW_W / 2 + 160, y0 = camY - VIEW_H / 2 - 160, y1 = camY + VIEW_H / 2 + 160;
-    const RAMP = 70;
+    const RAMP = 45;
     for (const p of sd.clouds){
-      const k = (m - p.e + 20) / (RAMP + 20);
+      const k = (m - p.e + 15) / (RAMP + 15);
       if (k <= 0) continue;
       const grow = Math.min(1, k);
       const x = p.x + Math.sin(t / 1700 + p.ph) * 7, y = p.y + Math.cos(t / 2100 + p.ph) * 5;
       if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-      const sc = p.s * 0.62 * grow * (1 + 0.025 * Math.sin(t / 800 + p.ph));
+      const sc = p.s * 0.44 * grow * (1 + 0.025 * Math.sin(t / 800 + p.ph));
       const spr = SD_PUFF_SPRITES[p.v], w = spr.width * sc, h = spr.height * sc;
       c.globalAlpha = Math.min(0.88, grow * 2.5);
       c.drawImage(spr, x - w / 2, y - h / 2, w, h);
@@ -3944,7 +4003,7 @@
     const list = peersIn(sector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
     const idx = list.findIndex(p => p.isMe);
     if (idx < 0) return;
-    const want = idx % 2 === 0 ? 'red' : 'blue';
+    const want = SD_TEAM_IDS[Math.floor(idx / sdSizeOfMeta(meta)) % SD_TEAM_IDS.length];
     if (state.team !== want){
       state.team = want; state.color = teamPaletteColor(want);
       state.room.presence({ team: want, color: state.color.id });
@@ -4250,7 +4309,7 @@
     state.remoteDrones = {}; state.consumedDrones = {};
     state.currentSector = null;
     state.roomMode = null; state.team = null; state.carrying = null; state.captures = 0;
-    state.sd = null; state.sdOut = false; state.sdTeams = false;
+    state.sd = null; state.sdOut = false; state.sdTeams = false; state.sdTeamSize = 0;
     byId('sdSpec').classList.remove('show'); byId('sdPoison').textContent = ''; byId('sdPoison').classList.remove('low');
     byId('resultBackdrop').classList.remove('show');
     state.bullets = []; state.sparks = []; state.killfeed = [];
@@ -4448,12 +4507,18 @@
     const mode = (m && GAME_MODES.some(g=>g.id === m.mode)) ? m.mode : 'ffa';
     let map = (m && MAPS[m.map]) ? m.map : 'crossfire';
     if (mode === 'showdown' && SD_BLOCKED_MAPS.includes(map)) map = 'crossfire';   // Showdown never runs on the Tetris maps
+    // Showdown format: false = solo, 'duo' = teams of 2, 'trio' = teams of 3 (max 9 players)
+    const teams = mode === 'showdown' && m ? (m.teams === 'trio' ? 'trio' : (m.teams === 'duo' || m.teams === true) ? 'duo' : false) : false;
+    let capOk = HOST_CAPS.includes(cap) ? cap : 4;
+    if (teams === 'trio') capOk = (capOk === 6 || capOk === 9) ? capOk : 6;
+    else if (teams === 'duo') capOk = (capOk >= 4 && capOk % 2 === 0) ? capOk : 4;
+    else if (capOk === 9) capOk = 8;
     return {
       name: String((m && m.name) || 'CUSTOM ROOM').slice(0,20).toUpperCase(),
       map,
-      cap: HOST_CAPS.includes(cap) ? cap : 4,
+      cap: capOk,
       mode,
-      teams: mode === 'showdown' && !!(m && m.teams),   // Showdown format: false = solo, true = 2 teams
+      teams,
       started: !!(m && m.started),
     };
   }
@@ -4481,7 +4546,12 @@
   }
   // Balance a joining player onto whichever team currently has fewer
   // people in that room (ties go to red).
-  function assignTeam(sector){
+  function assignTeam(sector, meta){
+    if (meta && meta.mode === 'showdown' && meta.teams){
+      // duo / trio: teammates are consecutive in join order (1-2 red, 3-4 blue, ...)
+      const size = sdSizeOfMeta(meta), n = peersIn(sector).length;
+      return SD_TEAM_IDS[Math.floor(n / size) % SD_TEAM_IDS.length];
+    }
     const counts = { red:0, blue:0 };
     peersIn(sector).forEach(p=>{ if (p.presence.team === 'red' || p.presence.team === 'blue') counts[p.presence.team]++; });
     return counts.red <= counts.blue ? 'red' : 'blue';
@@ -4727,7 +4797,7 @@
       card.className = 'room-card bracket';
       card.innerHTML = '<span class="bl"></span><span class="br"></span><h2></h2><div class="room-desc"></div><div class="room-count"></div><div class="slots"></div><div class="join-btn"><button></button></div>';
       card.querySelector('h2').textContent = r.meta.name;
-      const modeLabel = (GAME_MODES.find(g=>g.id===r.meta.mode) || GAME_MODES[0]).label + (r.meta.mode === 'showdown' ? (r.meta.teams ? ' (TEAMS)' : ' (SOLO)') : '');
+      const modeLabel = (GAME_MODES.find(g=>g.id===r.meta.mode) || GAME_MODES[0]).label + (r.meta.mode === 'showdown' ? (r.meta.teams === 'trio' ? ' (TRIO)' : r.meta.teams ? ' (DUO)' : ' (SOLO)') : '');
       const statusLabel = r.meta.started ? 'LIVE' : 'WAITING TO START';
       card.querySelector('.room-desc').textContent = MAPS[r.meta.map].name + ' \u00b7 ' + modeLabel + ' \u00b7 ' + statusLabel + ' \u00b7 host: ' + (r.list[0].presence.name || 'OPERATOR');
       card.querySelector('.room-count').textContent = r.list.length + ' / ' + r.meta.cap + ' operators';
@@ -4771,8 +4841,13 @@
     const sdOn = hostDraft.mode === 'showdown';
     if (sdOn && SD_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
     byId('hostSdRow').style.display = sdOn ? '' : 'none';
-    byId('hostSdName').textContent = hostDraft.sdTeams ? '2 TEAMS' : 'SOLO';
-    byId('hostSdToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', (el.dataset.fmt === 'teams') === !!hostDraft.sdTeams));
+    byId('hostSdName').textContent = hostDraft.sdFmt === 'trio' ? 'TRIO \u00b7 3 PER TEAM \u00b7 MAX 9' : hostDraft.sdFmt === 'duo' ? 'DUO \u00b7 2 PER TEAM' : 'SOLO';
+    byId('hostSdToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', el.dataset.fmt === hostDraft.sdFmt));
+    // player-count choices depend on the format (trio: 6 or 9; duo: 4-10 even; otherwise 2-10 even)
+    const fmtNow = sdOn ? hostDraft.sdFmt : 'solo';
+    const validCaps = fmtNow === 'trio' ? [6, 9] : fmtNow === 'duo' ? [4, 6, 8, 10] : [2, 4, 6, 8, 10];
+    if (!validCaps.includes(hostDraft.cap)) hostDraft.cap = validCaps.find(n => n >= hostDraft.cap) || validCaps[validCaps.length - 1];
+    byId('hostCapToggle').querySelectorAll('.theme-btn').forEach(el=>{ el.style.display = validCaps.includes(Number(el.dataset.cap)) ? '' : 'none'; });
     byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('disabled', sdOn && SD_BLOCKED_MAPS.includes(el.dataset.map)));
     byId('hostMapName').textContent = MAPS[hostDraft.map].name;
     byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('picked', el.dataset.map === hostDraft.map));
@@ -4813,10 +4888,10 @@
       modes.appendChild(b);
     });
     const fmt = byId('hostSdToggle'); fmt.innerHTML = '';
-    [['solo','SOLO'], ['teams','2 TEAMS']].forEach(([id, label])=>{
+    [['solo','SOLO'], ['duo','DUO'], ['trio','TRIO']].forEach(([id, label])=>{
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'theme-btn'; b.dataset.fmt = id; b.textContent = label;
-      b.addEventListener('click', ()=>{ hostDraft.sdTeams = (id === 'teams'); refreshHostUI(); });
+      b.addEventListener('click', ()=>{ hostDraft.sdFmt = id; refreshHostUI(); });
       fmt.appendChild(b);
     });
     refreshHostUI();
@@ -4835,7 +4910,7 @@
   byId('hostCreateBtn').addEventListener('click', ()=>{
     if (state.currentSector) return;
     if (!state.connected){ showToast('Not linked yet \u2014 try again in a moment.'); return; }
-    const meta = normMeta({ name: byId('hostNameInput').value.trim() || (state.name + "'S ROOM"), map: hostDraft.map, cap: hostDraft.cap, mode: hostDraft.mode, teams: hostDraft.mode === 'showdown' && hostDraft.sdTeams });
+    const meta = normMeta({ name: byId('hostNameInput').value.trim() || (state.name + "'S ROOM"), map: hostDraft.map, cap: hostDraft.cap, mode: hostDraft.mode, teams: hostDraft.mode === 'showdown' && hostDraft.sdFmt !== 'solo' ? hostDraft.sdFmt : false });
     closeHost();
     joinSector(newRoomId(), meta);
   });

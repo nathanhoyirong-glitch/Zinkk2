@@ -57,7 +57,7 @@ const KNOWN_MAPS = new Set(['crossfire', 'flats', 'fortress', 'bunkers', 'grid',
 // index.html; the server only needs to keep the tag from being tampered
 // with into something unexpected.
 const KNOWN_MODES = new Set(['ffa', 'teams', 'ctf', 'showdown']);
-const KNOWN_TEAMS = new Set(['red', 'blue']);
+const KNOWN_TEAMS = new Set(['red', 'blue', 'green', 'amber', 'purple']);   // red/blue for Teams + CTF; all five for Showdown duo/trio
 // ---- admin (/admin in-game) ----
 // The /admin login prompt itself only asks for ADMIN_PASSWORD -- no
 // username field. ADMIN_USERNAME still exists for isAdminCreds below (so
@@ -157,8 +157,8 @@ function sanitizePresence(d) {
       map: KNOWN_MAPS.has(m.map) ? m.map : 'crossfire',
       cap: Math.max(2, Math.min(10, parseInt(m.cap, 10) || 4)),
       mode: KNOWN_MODES.has(m.mode) ? m.mode : 'ffa',
-      // Showdown format: false = solo, true = 2 teams (ignored for every other mode)
-      teams: m.mode === 'showdown' && !!m.teams,
+      // Showdown format: false = solo, 'duo' = teams of 2, 'trio' = teams of 3 (ignored for every other mode)
+      teams: m.mode === 'showdown' ? (m.teams === 'trio' ? 'trio' : (m.teams === 'duo' || m.teams === true) ? 'duo' : false) : false,
       started: !!m.started
     };
   }
