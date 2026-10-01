@@ -1486,21 +1486,22 @@
     { id:'ffa',   label:'FFA',          desc:'Every tank for itself.' },
     { id:'teams', label:'2 TEAMS',      desc:'Red vs Blue. No friendly fire; team score = combined kills.' },
     { id:'ctf',   label:'CAPTURE FLAG', desc:'Red vs Blue. Steal the enemy flag and bring it to your base to score.' },
-    { id:'showdown', label:'SHOWDOWN',  desc:'Last team or player standing wins. No respawns. Poison smoke creeps in from the walls; shoot crates for upgrades (1 crate = 2 kills, lucky = 3).' },
+    { id:'showdown', label:'SHOWDOWN',  desc:'Last team or player standing wins. No respawns. Poison smoke clouds close in from all four walls and break crates open to drop +HP. Shoot crates for upgrades (1 crate = 2 kills, lucky = 3).' },
   ];
   const TEAM_IDS = ['red','blue'];
   // Showdown tuning. Maps listed here can't be picked for a Showdown room (the two Tetris maps).
   const SD_BLOCKED_MAPS = ['tetris', 'grid'];
   const SD = {
     GRACE_MS: 20000,        // calm before the smoke starts closing
-    START_R: 1100,          // safe-circle radius at the start -- just past the corners (1060px from centre)
-    SHRINK_PX_S: 4.6,       // how fast the smoke creeps in (px/sec); ~4 min from corners to centre
+    SHRINK_PX_S: 3.2,       // how fast each wall's smoke creeps inward (px/sec); ~4 min until it meets in the middle
+    HEAL_AMOUNT: 25,        // HP restored by a health pickup dropped when smoke breaks a crate
+    PICKUP_R: 30,
     TICK_MS: 1000,          // poison stings once per tick...
     POISON_DMG: 10,         // ...for this much HP
     CHESTS_BASE: 6,         // chests on the map = this + max players
     CHEST_HP: 100, CHEST_R: 26, CHEST_GAP: 230,
     LUCKY_CHANCE: 0.25,     // chance a chest pays 3 instead of 2
-    RINGS: 14, RING_D0: 60, RING_STEP: 85, PER_RING: 56,   // smoke puff field
+    CLOUD_GAP: 120,         // minimum spacing between smoke clouds (px) -- keeps them separate, not clumped
   };
   const MIN_HOST_START_PLAYERS = 2; // hosted rooms need this many joined before the host can hit START
 
@@ -2481,7 +2482,12 @@
       if (d.roomId !== state.currentSector || msg.isMe) return;
       sdOnChestOpen(d);
     });
-    state.unsubSd = ()=>{ unsubChestHit(); unsubChestOpen(); };
+    const unsubHeal = state.room.on('healTaken', (msg)=>{
+      const d = msg.data || {};
+      if (d.roomId !== state.currentSector || msg.isMe || !state.sd) return;
+      state.sd.pickups = state.sd.pickups.filter(p => p.id !== d.id);
+    });
+    state.unsubSd = ()=>{ unsubChestHit(); unsubChestOpen(); unsubHeal(); };
   }
 
   function spawnBullet(id, shooterId, shooterName, x, y, angle, color, speed, damage, square, shooterTeam, pierce, radius, fw){
@@ -3470,20 +3476,21 @@
     return out;
   }
 
-  function sdBuildPuffField(sector){
+  // Separate cartoon clouds scattered over the whole arena. A cloud "arrives" when the smoke front
+  // (which advances inward from all 4 walls at once) reaches its position.
+  function sdBuildCloudField(sector){
     const rng = ttRng(sdHash(String(sector)) ^ 0xA5A5A5);
-    const puffs = [];
-    for (let k = 0; k < SD.RINGS; k++){
-      for (let i = 0; i < SD.PER_RING; i++){
-        puffs.push({
-          d: SD.RING_D0 + k * SD.RING_STEP + (rng() - 0.5) * 40,   // distance beyond the safe-zone edge
-          a: (i + rng() * 0.8) / SD.PER_RING * Math.PI * 2,
-          s: 0.9 + rng() * 0.7, v: Math.floor(rng() * 4), ph: rng() * 6.283
-        });
-      }
+    const clouds = [], M = 50;
+    for (let tries = 0; tries < 6000; tries++){
+      const x = -M + rng() * (ARENA_W + 2 * M), y = -M + rng() * (ARENA_H + 2 * M);
+      if (clouds.some(c => Math.hypot(c.x - x, c.y - y) < SD.CLOUD_GAP)) continue;
+      clouds.push({
+        x, y, e: Math.max(0, Math.min(x, ARENA_W - x, y, ARENA_H - y)),   // distance to the nearest wall
+        s: 0.85 + rng() * 0.45, v: Math.floor(rng() * 4), ph: rng() * 6.283
+      });
     }
-    puffs.sort((p, q) => q.d - p.d);   // deepest first, so the ragged leading edge is painted on top
-    return puffs;
+    clouds.sort((p, q) => p.y - q.y);   // lower clouds paint over higher ones
+    return clouds;
   }
 
   // team members start on their own side of the map, solo players spread over all 8 spawn points
@@ -3522,24 +3529,27 @@
     const sector = state.currentSector, meta = getRoomMeta(sector) || normMeta(null);
     state.sd = {
       startedAt: performance.now(), over: false, poisonAcc: 0, inSmoke: false, warned: false,
-      chests: sdBuildChests(sector, meta.cap), puffs: sdBuildPuffField(sector),
+      chests: sdBuildChests(sector, meta.cap), clouds: sdBuildCloudField(sector), pickups: [],
       specId: null, lastCheck: 0, lastHud: 0,
     };
     state.sdOut = false;
     sdPlaceAtStart();
     state.invincibleUntil = performance.now() + 3000;   // clocks differ a little between players -- short grace at the bell
     byId('sdSpec').classList.remove('show');
-    showToast('SHOWDOWN \u2014 shoot chests for upgrades. Poison smoke is coming!');
+    showToast('SHOWDOWN \u2014 shoot crates for upgrades. Poison smoke is coming from every wall!');
   }
 
-  // radius of the safe circle right now (px from arena centre)
-  function sdRadius(){
-    const sd = state.sd; if (!sd) return Infinity;
+  // how far the smoke has advanced in from EACH wall right now (px). The safe zone is the square left in the middle.
+  function sdInset(){
+    const sd = state.sd; if (!sd) return 0;
     const t = performance.now() - sd.startedAt - SD.GRACE_MS;
-    if (t <= 0) return SD.START_R;
-    return Math.max(0, SD.START_R - SD.SHRINK_PX_S * (t / 1000));
+    if (t <= 0) return 0;
+    return Math.min(Math.min(ARENA_W, ARENA_H) / 2, SD.SHRINK_PX_S * (t / 1000));
   }
-  function sdInSmoke(x, y){ return Math.hypot(x - ARENA_W / 2, y - ARENA_H / 2) > sdRadius(); }
+  function sdInSmoke(x, y){
+    const m = sdInset(); if (m <= 0) return false;
+    return x < m || x > ARENA_W - m || y < m || y > ARENA_H - m;
+  }
 
   // ---- chests ----
   function sdChestAt(x, y, r){
@@ -3572,7 +3582,16 @@
     const sd = state.sd;
     if (!sd || sd.over || !isRoomHost(state.currentSector)) return;
     sd.chests.forEach(c => {
-      if (c.opened || c.resolving || c.hp > 0) return;
+      if (c.opened || c.resolving) return;
+      if (c.hp > 0){
+        // smoke has swallowed this crate -> it breaks open and drops a health pickup
+        if (!sdInSmoke(c.x, c.y)) return;
+        c.resolving = true;
+        const d = { roomId: state.currentSector, chestId: c.id, smoke: true, reward: 0 };
+        state.room.emit('chestOpen', d);
+        sdOnChestOpen(d);
+        return;
+      }
       c.resolving = true;
       const d = {
         roomId: state.currentSector, chestId: c.id,
@@ -3588,6 +3607,15 @@
     const ch = state.sd.chests.find(c => c.id === d.chestId);
     if (!ch || ch.opened) return;
     ch.opened = true; ch.hp = 0;
+    if (d.smoke){
+      // the smoke ate it: wooden splinters + a spinning +HP pickup left behind
+      spawnSpark(ch.x, ch.y, '#9a5728', true);
+      spawnSpark(ch.x + 14, ch.y - 10, '#c96d38', true);
+      spawnSpark(ch.x - 14, ch.y + 8, '#9acd3c', true);
+      state.sd.pickups.push({ id: ch.id, x: ch.x, y: ch.y });
+      pushKillfeed('The smoke broke a crate \u2014 +HP dropped!');
+      return;
+    }
     const reward = d.reward >= 3 ? 3 : 2;
     spawnSpark(ch.x, ch.y, '#f5c542', true);
     spawnSpark(ch.x + 14, ch.y - 10, '#fff2a8', true);
@@ -3605,6 +3633,19 @@
     const now = performance.now();
     sdHostResolve();
     if (!sd.warned && now - sd.startedAt >= SD.GRACE_MS){ sd.warned = true; showToast('POISON SMOKE IS CLOSING IN!'); }
+
+    // health pickups: walk over one to grab it (first to touch it wins)
+    if (state.alive && !sd.over && sd.pickups.length){
+      for (const p of sd.pickups.slice()){
+        if (Math.hypot(state.x - p.x, state.y - p.y) > SD.PICKUP_R + TANK_R) continue;
+        sd.pickups = sd.pickups.filter(q => q.id !== p.id);
+        state.hp = Math.min(effectiveMaxHp(), state.hp + SD.HEAL_AMOUNT);
+        state.room.presence({ hp: state.hp, maxHp: effectiveMaxHp() });
+        state.room.emit('healTaken', { roomId: state.currentSector, id: p.id });
+        spawnSpark(p.x, p.y, '#4cff7a', true);
+        showToast('+' + SD.HEAL_AMOUNT + ' HP');
+      }
+    }
 
     const poisonEl = byId('sdPoison');
     if (state.alive && !sd.over){
@@ -3722,8 +3763,8 @@
     } else who = alive.length + ' ALIVE';
     const el = performance.now() - sd.startedAt;
     if (el < SD.GRACE_MS) return { text: who + ' \u00b7 SMOKE IN ' + fmtClock(SD.GRACE_MS - el), low: false };
-    const R = sdRadius();
-    return { text: who + ' \u00b7 ZONE CLOSED IN ' + fmtClock(R / SD.SHRINK_PX_S * 1000), low: state.alive && sdInSmoke(state.x, state.y) };
+    const left = Math.min(ARENA_W, ARENA_H) / 2 - sdInset();
+    return { text: who + ' \u00b7 ZONE CLOSED IN ' + fmtClock(left / SD.SHRINK_PX_S * 1000), low: state.alive && sdInSmoke(state.x, state.y) };
   }
 
   // ---- drawing: chests ----
@@ -3781,40 +3822,35 @@
     });
   }
 
-  // ---- drawing: cartoon smoke (matches the reference: light yellow-green puffs with darker undersides) ----
+  // ---- drawing: cartoon smoke clouds (flat light green puffs with a darker underside) ----
   let SD_PUFF_SPRITES = null;
   function sdMakePuffSprites(){
     const rng = ttRng(0x5EED5);
     SD_PUFF_SPRITES = [];
     for (let v = 0; v < 4; v++){
-      const W = 200, H = 180, cv = document.createElement('canvas');
+      const W = 240, H = 170, cv = document.createElement('canvas');
       cv.width = W; cv.height = H;
       const c = cv.getContext('2d');
-      const lumps = [], n = 7 + Math.floor(rng() * 3);
-      for (let i = 0; i < n; i++){
-        const a = rng() * Math.PI * 2, d = rng() * 40;
-        lumps.push({ x: W / 2 + Math.cos(a) * d * 1.35, y: H / 2 + 6 + Math.sin(a) * d * 0.8, r: 26 + rng() * 20 });
-      }
+      const j = () => (rng() - 0.5) * 14;
+      const lumps = [
+        { x: 62 + j(),  y: 100 + j(), r: 36 + rng() * 8 },
+        { x: 112 + j(), y: 74 + j(),  r: 46 + rng() * 8 },
+        { x: 168 + j(), y: 92 + j(),  r: 40 + rng() * 8 },
+        { x: 92 + j(),  y: 112 + j(), r: 34 + rng() * 6 },
+        { x: 148 + j(), y: 116 + j(), r: 34 + rng() * 6 },
+      ];
       const disc = (x, y, r) => { c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); };
-      c.fillStyle = '#7fb02f'; lumps.forEach(l => disc(l.x + 4, l.y + 7, l.r));            // dark underside
-      c.fillStyle = '#9acd3c'; lumps.forEach(l => disc(l.x, l.y, l.r * 0.94));             // body
-      c.fillStyle = '#b9e155'; lumps.forEach(l => disc(l.x - 5, l.y - 6, l.r * 0.64));     // light top
-      // small round bubbles on the upper edge
-      c.fillStyle = '#c6ea68';
-      for (let i = 0; i < 3; i++){ const l = lumps[Math.floor(rng() * lumps.length)]; disc(l.x - l.r * 0.5, l.y - l.r * 0.55, 5 + rng() * 5); }
-      // curled shading lines along the bottom of a few lumps
-      c.strokeStyle = '#6f9f27'; c.lineWidth = 3; c.lineCap = 'round';
-      lumps.slice(0, 4).forEach(l => { c.beginPath(); c.arc(l.x + 2, l.y + 3, l.r * 0.72, Math.PI * 0.15, Math.PI * 0.75); c.stroke(); });
+      c.fillStyle = '#7cc46c'; lumps.forEach(l => disc(l.x + 3, l.y + 9, l.r));     // darker underside / outline
+      c.fillStyle = '#a2e08e'; lumps.forEach(l => disc(l.x, l.y, l.r));              // flat body
       SD_PUFF_SPRITES.push(cv);
     }
   }
   let SD_SMOKE_CV = null;
   function sdDrawSmoke(camX, camY){
-    const sd = state.sd, R = sdRadius();
-    if (R > 1075) return;                                    // the corners are 1060px from the centre -- nothing to draw yet
+    const sd = state.sd, m = sdInset();
+    if (m <= 0) return;                                      // grace period -- no smoke yet
     if (!SD_PUFF_SPRITES) sdMakePuffSprites();
-    const cx = ARENA_W / 2, cy = ARENA_H / 2, t = performance.now();
-    // smoke is painted on its own layer so we can cut clear windows around the tanks
+    const t = performance.now();
     const main = ctx;
     if (!SD_SMOKE_CV) SD_SMOKE_CV = document.createElement('canvas');
     if (SD_SMOKE_CV.width !== main.canvas.width || SD_SMOKE_CV.height !== main.canvas.height){
@@ -3826,21 +3862,21 @@
     c.setTransform(main.getTransform());
     c.save();
     c.beginPath(); c.rect(0, 0, ARENA_W, ARENA_H); c.clip();
-    // thin gas under the puffs: everything outside the safe circle
-    c.beginPath(); c.rect(-10, -10, ARENA_W + 20, ARENA_H + 20); c.arc(cx, cy, Math.max(0.01, R), 0, Math.PI * 2, true);
-    c.fillStyle = 'rgba(154,205,60,0.22)'; c.fill('evenodd');
-    // puffs, culled to the visible area
-    const x0 = camX - VIEW_W / 2 - 150, x1 = camX + VIEW_W / 2 + 150, y0 = camY - VIEW_H / 2 - 150, y1 = camY + VIEW_H / 2 + 150;
-    c.globalAlpha = 0.5;
-    for (const p of sd.puffs){
-      const rad = R + p.d;
-      if (rad < 0 || rad > 1250) continue;
-      const a = p.a + Math.sin(t / 4000 + p.ph) * 0.02;
-      const x = cx + Math.cos(a) * rad + Math.sin(t / 900 + p.ph) * 5;
-      const y = cy + Math.sin(a) * rad + Math.cos(t / 1100 + p.ph) * 5;
+    // faint gas between the clouds so the poisoned area is always readable: everything outside the safe square
+    c.beginPath(); c.rect(-10, -10, ARENA_W + 20, ARENA_H + 20); c.rect(m, m, Math.max(0, ARENA_W - 2 * m), Math.max(0, ARENA_H - 2 * m));
+    c.fillStyle = 'rgba(160,215,110,0.16)'; c.fill('evenodd');
+    // separate clouds, popping in as the front sweeps past them
+    const x0 = camX - VIEW_W / 2 - 160, x1 = camX + VIEW_W / 2 + 160, y0 = camY - VIEW_H / 2 - 160, y1 = camY + VIEW_H / 2 + 160;
+    const RAMP = 70;
+    for (const p of sd.clouds){
+      const k = (m - p.e + 20) / (RAMP + 20);
+      if (k <= 0) continue;
+      const grow = Math.min(1, k);
+      const x = p.x + Math.sin(t / 1700 + p.ph) * 7, y = p.y + Math.cos(t / 2100 + p.ph) * 5;
       if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-      const sc = p.s * (1 + 0.04 * Math.sin(t / 700 + p.ph)) * 0.95;
+      const sc = p.s * 0.62 * grow * (1 + 0.025 * Math.sin(t / 800 + p.ph));
       const spr = SD_PUFF_SPRITES[p.v], w = spr.width * sc, h = spr.height * sc;
+      c.globalAlpha = Math.min(0.88, grow * 2.5);
       c.drawImage(spr, x - w / 2, y - h / 2, w, h);
     }
     c.globalAlpha = 1;
@@ -3859,19 +3895,36 @@
       hole(s.x, s.y, 130);
     });
     c.globalCompositeOperation = 'source-over';
-    // composite the smoke layer onto the game canvas in screen space
     main.save();
     main.setTransform(1, 0, 0, 1, 0, 0);
     main.drawImage(SD_SMOKE_CV, 0, 0);
     main.restore();
-    // thin dashed line marks exactly where the poison starts
-    if (R > 1){
+    // thin dashed square marks exactly where the poison starts
+    if (ARENA_W - 2 * m > 1 && ARENA_H - 2 * m > 1){
       main.save();
-      main.beginPath(); main.rect(0, 0, ARENA_W, ARENA_H); main.clip();
       main.setLineDash([16, 12]); main.lineWidth = 3; main.strokeStyle = 'rgba(255,255,255,0.45)';
-      main.beginPath(); main.arc(cx, cy, R, 0, Math.PI * 2); main.stroke(); main.setLineDash([]);
+      main.strokeRect(m, m, ARENA_W - 2 * m, ARENA_H - 2 * m); main.setLineDash([]);
       main.restore();
     }
+  }
+  // spinning +HP pickups dropped when the smoke breaks a crate (drawn above the smoke so they're always visible)
+  function sdDrawPickups(){
+    const t = performance.now();
+    state.sd.pickups.forEach(p => {
+      const bob = Math.sin(t / 300 + p.id) * 3, pulse = 0.5 + 0.5 * Math.sin(t / 250 + p.id);
+      ctx.save();
+      ctx.translate(p.x, p.y + bob);
+      ctx.globalAlpha = 0.25 + 0.2 * pulse; ctx.fillStyle = '#4cff7a';
+      ctx.beginPath(); ctx.arc(0, 0, 28 + 4 * pulse, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.rotate(t / 450 + p.id);
+      const arm = 6.5, len = 17;
+      const plus = () => { ctx.beginPath(); ctx.rect(-arm, -len, arm * 2, len * 2); ctx.rect(-len, -arm, len * 2, arm * 2); };
+      ctx.lineJoin = 'round';
+      plus(); ctx.lineWidth = 6; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+      plus(); ctx.fillStyle = '#e8362f'; ctx.fill();
+      ctx.restore();
+    });
   }
   // faint green wash over the whole screen while you're being poisoned
   function sdDrawTint(){
@@ -4029,7 +4082,7 @@
 
     ctx.drawImage(bgCanvas, 0, 0);
     if (ACTIVE_MAP === 'tetris') ttDraw(ctx);
-    if (state.sd){ sdDrawChests(); sdDrawSmoke(camX, camY); }
+    if (state.sd){ sdDrawChests(); sdDrawSmoke(camX, camY); sdDrawPickups(); }
 
     // other tanks
     peersIn(state.currentSector).forEach(p=>{
