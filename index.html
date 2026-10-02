@@ -3076,7 +3076,12 @@
       const id = (state.myPeerId||'me') + '-' + now.toFixed(0) + '-' + i + '-' + Math.floor(Math.random()*1000);
       const jitter = def.spread ? (Math.random() - 0.5) * 2 * def.spread : 0;   // machine gun spray
       return { id, x: bx, y: by, angle: shotAngleFor(barrel, tipAngle) + jitter };
+    }).filter(sh=>{
+      const hit = muzzleBlockedAt(state.x, state.y, sh.x, sh.y, BULLET_R);
+      if (hit){ spawnSpark(hit.x, hit.y, state.color.hex); return false; }   // barrel is through a wall: the shot dies on it
+      return true;
     });
+    if (!shots.length) return;
 
     const isFw = loadoutId === 'firework';
     const pierce = isFw ? 0 : effectivePierce();
@@ -3108,6 +3113,8 @@
         const a = state.turretAngle + def.rotOffset;
         const dist = def.barrels[0].dist * scale;
         const x = state.x + Math.cos(a) * dist, y = state.y + Math.sin(a) * dist;
+        const hitW = muzzleBlockedAt(state.x, state.y, x, y, r);
+        if (hitW){ spawnSpark(hitW.x, hitW.y, state.color.hex); return; }
         const id = (state.myPeerId||'me') + '-' + performance.now().toFixed(0) + '-b' + i + '-' + Math.floor(Math.random()*1000);
         spawnBullet(id, state.myPeerId, state.name, x, y, state.turretAngle, state.color.hex, spd, dmg, false, state.team, pierce, r);
         if (state.room){
@@ -3333,6 +3340,93 @@
     return (dx*dx + dy*dy) < r*r;
   }
 
+
+  // ---- smooth wall sliding ----
+  // wallPush(): if a circle at (cx,cy) radius r overlaps wall `o`, returns the unit normal pointing out of the wall
+  // and how far to move along it to just clear it (works for rects, arcs, rotated bars and the round rim).
+  function wallPush(cx, cy, r, o){
+    if (!o.k){
+      const nx = Math.max(o.x, Math.min(cx, o.x + o.w)), ny = Math.max(o.y, Math.min(cy, o.y + o.h));
+      const dx = cx - nx, dy = cy - ny, d2 = dx * dx + dy * dy;
+      if (d2 >= r * r) return null;
+      if (d2 > 1e-9){ const d = Math.sqrt(d2); return { nx: dx / d, ny: dy / d, depth: r - d + 0.02 }; }
+      const l = cx - o.x, rt = o.x + o.w - cx, t = cy - o.y, b = o.y + o.h - cy, m = Math.min(l, rt, t, b);
+      if (m === l) return { nx: -1, ny: 0, depth: l + r + 0.02 };
+      if (m === rt) return { nx: 1, ny: 0, depth: rt + r + 0.02 };
+      if (m === t) return { nx: 0, ny: -1, depth: t + r + 0.02 };
+      return { nx: 0, ny: 1, depth: b + r + 0.02 };
+    }
+    if (o.k === 'o'){
+      const dx = cx - o.cx, dy = cy - o.cy, d = Math.hypot(dx, dy) || 1e-6;
+      if (d + r <= o.R) return null;
+      return { nx: -dx / d, ny: -dy / d, depth: d + r - o.R + 0.02 };
+    }
+    if (cx < o.x - r || cx > o.x + o.w + r || cy < o.y - r || cy > o.y + o.h + r) return null;
+    if (o.k === 'r'){
+      const dx = cx - o.cx, dy = cy - o.cy, ax = dx * o.ux + dy * o.uy, ay = -dx * o.uy + dy * o.ux;
+      const clx = Math.max(-o.hl, Math.min(o.hl, ax)), cly = Math.max(-o.hw, Math.min(o.hw, ay));
+      const ex = ax - clx, ey = ay - cly, d2 = ex * ex + ey * ey;
+      if (d2 >= r * r) return null;
+      let lx, ly, depth;
+      if (d2 > 1e-9){ const d = Math.sqrt(d2); lx = ex / d; ly = ey / d; depth = r - d + 0.02; }
+      else {
+        const pa = o.hl - Math.abs(ax), pb = o.hw - Math.abs(ay);
+        if (pb <= pa){ lx = 0; ly = ay < 0 ? -1 : 1; depth = pb + r + 0.02; } else { lx = ax < 0 ? -1 : 1; ly = 0; depth = pa + r + 0.02; }
+      }
+      return { nx: lx * o.ux - ly * o.uy, ny: lx * o.uy + ly * o.ux, depth };
+    }
+    // annular sector
+    const dx = cx - o.cx, dy = cy - o.cy, d = Math.hypot(dx, dy) || 1e-6, ux = dx / d, uy = dy / d, TAU2 = 6.283185307179586;
+    let rel = Math.atan2(dy, dx) - o.a0; rel = ((rel % TAU2) + TAU2) % TAU2;
+    if (rel <= o.span){
+      if (!(d + r > o.r0 && d - r < o.r1)) return null;
+      const inD = d - (o.r0 - r - 0.02), outD = (o.r1 + r + 0.02) - d;
+      return inD < outD ? { nx: -ux, ny: -uy, depth: inD } : { nx: ux, ny: uy, depth: outD };
+    }
+    let best = null;
+    for (const t of [o.a0, o.a0 + o.span]){
+      const ex_ = Math.cos(t), ey_ = Math.sin(t), along = Math.max(o.r0, Math.min(o.r1, dx * ex_ + dy * ey_));
+      const px = dx - ex_ * along, py = dy - ey_ * along, dd = Math.hypot(px, py);
+      if (dd < r && (!best || dd < best.dd)) best = { dd, px, py };
+    }
+    if (!best) return null;
+    const dd = best.dd || 1e-6;
+    return { nx: best.px / dd, ny: best.py / dd, depth: r - best.dd + 0.02 };
+  }
+  // Move the tank toward (nx,ny) in small steps; any wall it ends up inside pushes it out along the wall's normal,
+  // so it glides smoothly along flat, angled and curved walls instead of stopping/stuttering (no more vibrating).
+  function moveTankSliding(nx, ny){
+    const sx = state.x, sy = state.y, dist = Math.hypot(nx - sx, ny - sy);
+    const steps = Math.max(1, Math.ceil(dist / 6));
+    let x = sx, y = sy;
+    for (let st = 1; st <= steps; st++){
+      x = sx + (nx - sx) * st / steps; y = sy + (ny - sy) * st / steps;
+      for (let it = 0; it < 4; it++){
+        let moved = false;
+        for (const o of OBSTACLES){
+          const w = wallPush(x, y, TANK_R, o);
+          if (w){ x += w.nx * w.depth; y += w.ny * w.depth; moved = true; }
+        }
+        if (!moved) break;
+      }
+      x = Math.max(TANK_R, Math.min(ARENA_W - TANK_R, x)); y = Math.max(TANK_R, Math.min(ARENA_H - TANK_R, y));
+    }
+    if (canOccupy(x, y)){ state.x = x; state.y = y; return; }
+    // rare corner case the push-out couldn't fully resolve: fall back to plain axis-separated movement
+    if (canOccupy(nx, sy)) state.x = nx;
+    if (canOccupy(state.x, ny)) state.y = ny;
+  }
+  // Barrels can poke through thin walls; a shot whose muzzle is on the far side of a wall (or inside one) just
+  // hits the wall instead of appearing on the other side. Returns the impact point, or null if the way is clear.
+  function muzzleBlockedAt(x0, y0, x1, y1, r){
+    const len = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.ceil(len / 4));
+    for (let i = 1; i <= n; i++){
+      const x = x0 + (x1 - x0) * i / n, y = y0 + (y1 - y0) * i / n, rr = i === n ? r : 2;
+      for (const o of OBSTACLES) if (rectCircleCollide(x, y, rr, o)) return { x, y };
+    }
+    return null;
+  }
+
   function nearestEnemyAngle(){
     const list = peersIn(state.currentSector).filter(p=>!p.isMe && p.presence.alive!==false);
     if (!list.length) return state.turretAngle;
@@ -3460,8 +3554,7 @@
         const len = Math.hypot(dx,dy);
         const nx = state.x + (dx/len) * effectiveMoveSpeed() * dt;
         const ny = state.y + (dy/len) * effectiveMoveSpeed() * dt;
-        if (canOccupy(nx, state.y)) state.x = nx;
-        if (canOccupy(state.x, ny)) state.y = ny;
+        moveTankSliding(nx, ny);
         state.moveAngle = Math.atan2(dy, dx);
         // Overlord only: the move stick turns the hull to face the direction of travel
         // (turretAngle is what gets drawn and synced to other players)
@@ -4160,6 +4253,8 @@
   function botFire(b){
     const ang = b.a + (Math.random() - 0.5) * 2 * BOT.ERR;
     const x = b.x + Math.cos(ang) * (TANK_R + 12), y = b.y + Math.sin(ang) * (TANK_R + 12);
+    const hitW = muzzleBlockedAt(b.x, b.y, x, y, BULLET_R);
+    if (hitW){ spawnSpark(hitW.x, hitW.y, colorHex(b.team)); return; }
     const id = botId(b) + '-' + Math.floor(performance.now()) + '-' + Math.floor(Math.random() * 1000);
     spawnBullet(id, botId(b), b.name, x, y, ang, colorHex(b.team), BULLET_SPEED, BOT.DMG, false, b.team, 0, BULLET_R, false);
     state.room.emit('shoot', { shots: [{ id, x, y, angle: ang, r: BULLET_R }], shooterId: botId(b), shooterName: b.name,
