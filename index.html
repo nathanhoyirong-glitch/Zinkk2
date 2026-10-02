@@ -396,6 +396,11 @@
   .minimap.show { display:block; }
   .minimap.dragging { cursor:grabbing; }
   .minimap canvas { display:block; pointer-events:none; }
+  .mm-resize {
+    position:absolute; right:0; bottom:0; width:18px; height:18px; cursor:nwse-resize; touch-action:none;
+    background:linear-gradient(135deg, transparent 0 50%, var(--green) 50% 58%, transparent 58% 70%, var(--green) 70% 78%, transparent 78%);
+    border-bottom-right-radius:var(--radius);
+  }
 
   /* ---------- in-game chat ---------- */
   .chat-dot { position:absolute; top:2px; right:2px; width:8px; height:8px; border-radius:50%; background:var(--amber); border:1px solid rgba(var(--panel-rgb),0.9); display:none; }
@@ -579,7 +584,7 @@
           <button class="hud-leave-btn" id="gameSettingsBtn" aria-label="Settings">&#9881;</button>
           <button class="hud-leave-btn" id="cmdBtn" aria-label="Commands">/</button>
           <button class="hud-leave-btn" id="chatBtn" aria-label="Chat">&#128172;<span class="chat-dot"></span></button>
-          <button class="hud-leave-btn" id="mapBtn" aria-label="Minimap (M)" title="Minimap (M)">&#128506;</button>
+          <button class="hud-leave-btn" id="mapBtn" aria-label="Minimap (M)" title="Minimap (M)" style="font-family:var(--display);font-weight:700;font-size:14px;">M</button>
           <b id="hudRoomName">SECTOR</b><span id="hudSelfHealth">HP 100</span>
           <span class="match-timer" id="matchTimer"></span>
           <span class="match-timer" id="droneCount"></span>
@@ -598,7 +603,7 @@
         </div>
       </div>
 
-      <div class="minimap" id="minimap" aria-label="Minimap"><canvas id="mmCanvas"></canvas></div>
+      <div class="minimap" id="minimap" aria-label="Minimap"><canvas id="mmCanvas"></canvas><div class="mm-resize" id="mmResize" title="Drag to resize"></div></div>
 
       <div class="killfeed" id="killfeed"></div>
       <div class="sd-spec" id="sdSpec"><span id="sdSpecText"></span><button type="button" id="sdSpecNext">NEXT</button></div>
@@ -1373,8 +1378,8 @@
     if (score >= PREDATOR_KILLS && loadout7 === 'destroyer') return loadout20 === 'behemoth' ? 'behemoth' : 'firework';   // Destroyer, 20 kills: Firework or Behemoth (Firework if you miss the popup)
     if (score >= PREDATOR_KILLS && loadout7 === 'hunter') return loadout20 === 'quintet' ? 'quintet' : 'predator';  // 20-kill choice; Predator if you miss the popup
     if (score >= PREDATOR_KILLS && loadout7 === 'parallel') return loadout20 === 'octo' ? 'octo' : 'quintet';       // Twin route, Diagonal: Quintet or Octo
-    if (score >= PREDATOR_KILLS && (loadout7 === 'triple' || loadout7 === 'quad')) return loadout20 === 'quadtwin' ? 'quadtwin' : loadout20 === 'autotriplet' ? 'autotriplet' : 'triplet';  // Twin route, Triple/Quad: Triplet or Quad Twin
-    if (score >= PREDATOR_KILLS && loadout7 === 'gunner') return 'autogunner';   // Machine Gun route, 20 kills: Gunner -> Auto Gunner
+    if (score >= PREDATOR_KILLS && (loadout7 === 'triple' || loadout7 === 'quad')) return loadout20 === 'quadtwin' ? 'quadtwin' : 'triplet';  // Twin route, Triple/Quad: Triplet or Quad Twin
+    if (score >= PREDATOR_KILLS && loadout7 === 'gunner') return loadout20 === 'autotriplet' ? 'autotriplet' : 'autogunner';   // Machine Gun route, Gunner only: Auto Gunner or Auto Triplet (Auto Gunner if you miss the popup)
     if (score >= PREDATOR_KILLS && loadout7 === 'overseer') return 'overlord';   // Sniper route, 20 kills: Hunter -> Predator, Overseer -> Overlord
     if (score >= LOADOUT7_KILLS && (loadout7 === 'triple' || loadout7 === 'parallel' || loadout7 === 'quad' || loadout7 === 'gunner' || loadout7 === 'destroyer' || loadout7 === 'overseer' || loadout7 === 'hunter')) return loadout7;
     if (score >= FIRST_PICK_KILLS) return TIER1_TANKS.indexOf(loadout1) >= 0 ? loadout1 : 'twin';  // undecided = twin
@@ -2091,7 +2096,7 @@
   function offerLoadoutChoice(tier){
     if (!state.spritesReady) return;
     choiceTier = tier;
-    choiceOptions = tier === 20 ? (state.loadout7 === 'destroyer' ? ['firework','behemoth'] : state.loadout7 === 'parallel' ? ['quintet','octo'] : (state.loadout7 === 'hunter' ? ['predator','quintet'] : ['triplet','quadtwin','autotriplet'])) : (tier === 14 ? ['triplet','quad'] : (tier === 1 ? TIER1_TANKS : (state.loadout1 === 'machinegun' ? ['gunner','destroyer'] : state.loadout1 === 'sniper' ? ['overseer','hunter'] : ['triple','quad','parallel'])));
+    choiceOptions = tier === 20 ? (state.loadout7 === 'destroyer' ? ['firework','behemoth'] : state.loadout7 === 'parallel' ? ['quintet','octo'] : (state.loadout7 === 'hunter' ? ['predator','quintet'] : (state.loadout7 === 'gunner' ? ['autogunner','autotriplet'] : ['triplet','quadtwin']))) : (tier === 14 ? ['triplet','quad'] : (tier === 1 ? TIER1_TANKS : (state.loadout1 === 'machinegun' ? ['gunner','destroyer'] : state.loadout1 === 'sniper' ? ['overseer','hunter'] : ['triple','quad','parallel'])));
     buildLoadoutTiles(); // rebuild so previews reflect the player's current color
     byId('loadoutChoice').classList.add('show');
     clearTimeout(loadoutChoiceTimer);
@@ -4808,14 +4813,11 @@
       if (s === LOADOUT7_KILLS){
         offerLoadoutChoice(7);
       }
-      if (s === PREDATOR_KILLS && ['hunter','parallel','triple','quad','destroyer'].indexOf(state.loadout7) >= 0){
+      if (s === PREDATOR_KILLS && ['hunter','parallel','triple','quad','destroyer','gunner'].indexOf(state.loadout7) >= 0){
         offerLoadoutChoice(20);   // Hunter: Predator/Quintet, Diagonal: Quintet/Octo, Triple or Quad: Triplet/Quad Twin
       }
       if (s === PREDATOR_KILLS && state.loadout7 === 'overseer'){
         showToast('CANNON: OVERLORD');
-      }
-      if (s === PREDATOR_KILLS && state.loadout7 === 'gunner'){
-        showToast('CANNON: AUTO GUNNER');
       }
     }
     renderScoreStrip();
@@ -5031,11 +5033,14 @@
   // into a cached canvas (rebuilt when the map / theme changes); players, bots
   // and falling Tetris blocks are redrawn on top ~25x a second.
   // ---------------------------------------------------------------
-  const MM = { open:false, placed:false, size:0, dpr:1, stat:null, statBg:null, statMap:null, last:0 };
+  const MM_MIN = 80, MM_MAX = 500;
+  const MM = { open:false, placed:false, userSize:0, size:0, dpr:1, stat:null, statBg:null, statMap:null, last:0 };
   function mmEls(){ return { box: byId('minimap'), cv: byId('mmCanvas') }; }
   function mmLayout(){
     const { cv } = mmEls();
-    const size = window.innerWidth < 600 ? 96 : 120, dpr = Math.min(2, window.devicePixelRatio || 1);
+    const par = byId('minimap').offsetParent || document.body;
+    const cap = Math.max(MM_MIN, Math.min(MM_MAX, par.clientWidth - 12, par.clientHeight - 12));
+    const size = Math.round(clamp(MM.userSize || (window.innerWidth < 600 ? 96 : 120), MM_MIN, cap)), dpr = Math.min(2, window.devicePixelRatio || 1);
     if (MM.size === size && MM.dpr === dpr) return;
     MM.size = size; MM.dpr = dpr;
     cv.width = cv.height = Math.round(size * dpr);
@@ -5156,6 +5161,25 @@
     box.addEventListener('pointercancel', end);
     window.addEventListener('resize', () => { if (MM.open){ mmLayout(); mmMoveTo(parseFloat(box.style.left) || 0, parseFloat(box.style.top) || 0); } });
     byId('mapBtn').addEventListener('click', () => mmToggle());
+
+    // bottom-right corner handle: drag to make the map bigger / smaller
+    const grip = byId('mmResize');
+    let rs = null;
+    grip.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      rs = { id: e.pointerId, sx: e.clientX, sy: e.clientY, size: MM.size };
+      try { grip.setPointerCapture(e.pointerId); } catch(err){}
+    });
+    grip.addEventListener('pointermove', e => {
+      if (!rs || e.pointerId !== rs.id) return;
+      MM.userSize = rs.size + ((e.clientX - rs.sx) + (e.clientY - rs.sy)) / 2;
+      mmLayout();
+      mmMoveTo(parseFloat(box.style.left) || 0, parseFloat(box.style.top) || 0);   // keep it fully on screen
+      MM.last = 0; mmDraw();
+    });
+    const endR = e => { if (rs && e.pointerId === rs.id){ rs = null; try { grip.releasePointerCapture(e.pointerId); } catch(err){} } };
+    grip.addEventListener('pointerup', endR);
+    grip.addEventListener('pointercancel', endR);
   })();
 
   function drawFlag(x,y,color,atBase){
