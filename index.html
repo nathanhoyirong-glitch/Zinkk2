@@ -1470,19 +1470,19 @@
   // INSANITY: a circular 100 x 100 (3000 x 3000 px) maze -- concentric rings split into cells, wound into one big
   // labyrinth (recursive backtracker) and rasterised onto a fine grid so it still works with plain rectangles.
   function buildCircleMaze(cfg){
-    const SIZE = 3000, SQ = 20, S = SIZE / SQ, CX = SIZE / 2, CY = SIZE / 2, TAU = Math.PI * 2;
-    const RW = cfg.RW, RINGS = cfg.RINGS, HALF = 12;   // ring spacing, number of rings, half wall thickness
-    const rng = ttRng(cfg.seed);
+    const SIZE = 3000, SQ = 8, S = SIZE / SQ, CX = SIZE / 2, CY = SIZE / 2, TAU = Math.PI * 2;
+    const RW = cfg.RW, RINGS = cfg.RINGS, HALF = 10;   // ring spacing, number of rings, half wall thickness
+    const rng = ttRng(cfg.seed), EDGE = 30, TR = 18;   // EDGE: min clearance from the border; TR: tank radius
     // cells per ring: 1 in the middle, then doubling whenever cells would get too long
     const N = [1];
     for (let k = 1; k < RINGS; k++){ let n = k === 1 ? 6 : N[k - 1]; if (TAU * RW * (k + 0.5) / n > 230) n *= 2; N.push(n); }
     // only cells that actually show inside the square arena take part in the maze
     const vis = N.map((n, k) => { const a = new Uint8Array(n); for (let j = 0; j < n; j++){
-      let ok = 0;
-      for (let ai = 0; ai < 5 && !ok; ai++) for (let ri = 0; ri < 4 && !ok; ri++){
-        const th = (j + (ai + 0.5) / 5) * TAU / n, r = RW * k + 4 + (RW - 8) * ri / 3;
+      let ok = 1;
+      for (let ai = 0; ai <= 6 && ok; ai++) for (let ri = 0; ri <= 3 && ok; ri++){
+        const th = (j + ai / 6) * TAU / n, r = RW * k + RW * ri / 3;
         const x = CX + Math.cos(th) * r, y = CY + Math.sin(th) * r;
-        if (x > SQ && x < SIZE - SQ && y > SQ && y < SIZE - SQ) ok = 1;
+        if (!(x > EDGE && x < SIZE - EDGE && y > EDGE && y < SIZE - EDGE)) ok = 0;   // cell must sit fully inside, clear of the border
       }
       a[j] = k === 0 ? 1 : ok;
     } return a; });
@@ -1541,8 +1541,43 @@
     for (let i = 0; i < 12; i++){
       const a = (15 + 30 * i) * Math.PI / 180;
       const cu = Math.floor((CX + Math.cos(a) * cfg.roomR) / SQ), cv = Math.floor((CY + Math.sin(a) * cfg.roomR) / SQ);
-      for (let v = cv - 3; v <= cv + 3; v++) for (let u = cu - 3; u <= cu + 3; u++) wall[v][u] = 0;
+      for (let v = cv - 10; v <= cv + 10; v++) for (let u = cu - 10; u <= cu + 10; u++){
+        if (Math.hypot(u - cu, v - cv) * SQ <= 76 && u > 0 && v > 0 && u < S - 1 && v < S - 1) wall[v][u] = 0;   // round room
+      }
       zones.push({ x: (cu + 0.5) * SQ, y: (cv + 0.5) * SQ });
+    }
+    // keep only space a tank can actually reach: flood-fill with the tank's radius from the first room, then wall off
+    // everything else (pockets, slivers and gaps too narrow to drive through), so nobody can ever get stuck or wedged
+    {
+      const offs = [], rE = TR + 1, rN = Math.ceil(rE / SQ);
+      for (let dv = -rN; dv <= rN; dv++) for (let du = -rN; du <= rN; du++) if (Math.hypot(du, dv) * SQ <= rE) offs.push([du, dv]);
+      const wide = new Uint8Array(S * S);
+      for (let v = 0; v < S; v++) for (let u = 0; u < S; u++){
+        if (wall[v][u]) continue;
+        let ok = 1;
+        for (const [du, dv] of offs){ const a = u + du, b = v + dv; if (a < 0 || b < 0 || a >= S || b >= S || wall[b][a]){ ok = 0; break; } }
+        wide[v * S + u] = ok;
+      }
+      const reach = new Uint8Array(S * S), q = [];
+      const seed = Math.floor(zones[0].y / SQ) * S + Math.floor(zones[0].x / SQ);
+      if (wide[seed]){ reach[seed] = 1; q.push(seed); }
+      for (let qi = 0; qi < q.length; qi++){
+        const c = q[qi], cu = c % S, cv = (c - cu) / S;
+        for (let dv = -1; dv <= 1; dv++) for (let du = -1; du <= 1; du++){
+          const a = cu + du, b = cv + dv; if (a < 0 || b < 0 || a >= S || b >= S) continue;
+          const id = b * S + a; if (wide[id] && !reach[id]){ reach[id] = 1; q.push(id); }
+        }
+      }
+      const keep = new Uint8Array(S * S), rD = Math.ceil((TR + SQ) / SQ);
+      for (const c of q){
+        const cu = c % S, cv = (c - cu) / S;
+        for (let dv = -rD; dv <= rD; dv++) for (let du = -rD; du <= rD; du++){
+          const a = cu + du, b = cv + dv; if (a < 0 || b < 0 || a >= S || b >= S) continue;
+          if (Math.hypot(du, dv) * SQ <= TR + SQ) keep[b * S + a] = 1;
+        }
+      }
+      for (let v = 0; v < S; v++) for (let u = 0; u < S; u++) if (!wall[v][u] && !keep[v * S + u]) wall[v][u] = 1;
+      var unreachableRooms = zones.filter(z => !reach[Math.floor(z.y / SQ) * S + Math.floor(z.x / SQ)]).length;
     }
     // merge wall squares into as few rectangles as possible
     const obstacles = [], active = {};
@@ -1553,7 +1588,7 @@
       for (const key of Object.keys(active)){ if (!keys.has(key)){ obstacles.push(active[key]); delete active[key]; } }
       for (const [u, len] of runs){ const key = u + '_' + len; if (active[key]) active[key].h += SQ; else active[key] = { x: u * SQ, y: v * SQ, w: len * SQ, h: SQ }; }
     }
-    return { obstacles, zones, size: SIZE, flagBases: { red: zones[0], blue: zones[6] } };
+    return { obstacles, zones, size: SIZE, flagBases: { red: zones[0], blue: zones[6] }, fine: true, unreachableRooms };
   }
 
   const LOST_ENDS = buildMaze(0x10575E7D, 0.05);
@@ -1594,8 +1629,8 @@
       {x:510,y:0,w:30,h:390},{x:510,y:1110,w:30,h:390},{x:660,y:0,w:30,h:390},{x:660,y:1110,w:30,h:390},{x:810,y:0,w:30,h:390},{x:810,y:1110,w:30,h:390},{x:960,y:0,w:30,h:390},{x:960,y:1110,w:30,h:390},{x:0,y:510,w:390,h:30},{x:1110,y:510,w:390,h:30},{x:0,y:660,w:390,h:30},{x:1110,y:660,w:390,h:30},{x:0,y:810,w:390,h:30},{x:1110,y:810,w:390,h:30},{x:0,y:960,w:390,h:30},{x:1110,y:960,w:390,h:30},{x:240,y:0,w:30,h:210},{x:1230,y:0,w:30,h:210},{x:240,y:1290,w:30,h:210},{x:1230,y:1290,w:30,h:210},{x:570,y:570,w:120,h:30},{x:810,y:570,w:120,h:30},{x:570,y:900,w:120,h:30},{x:810,y:900,w:120,h:30},{x:570,y:570,w:30,h:120},{x:570,y:810,w:30,h:120},{x:900,y:570,w:30,h:120},{x:900,y:810,w:30,h:120},{x:720,y:720,w:60,h:60},{x:330,y:330,w:60,h:60},{x:1110,y:330,w:60,h:60},{x:330,y:1110,w:60,h:60},{x:1110,y:1110,w:60,h:60}
     ] },
     lostends: { name:'LOST ENDS', desc:'Gigantic 100x100 maze. Spawn at the sides; teams start together', obstacles: LOST_ENDS.obstacles, size: LOST_ENDS.size, zones: LOST_ENDS.zones, tight: true },
-    insanity: { name:'INSANITY', desc:'Circular 100x100 maze: ring after ring of winding corridors. Spawn rooms around the outside', obstacles: INSANITY.obstacles, size: INSANITY.size, zones: INSANITY.zones, tight: true, flagBases: INSANITY.flagBases },
-    circle: { name:'CIRCLE MAZE', desc:'Round 3000px disc maze, open room in the middle. Spawn rooms ring the outside', obstacles: CIRCLE.obstacles, size: CIRCLE.size, zones: CIRCLE.zones, tight: true, flagBases: CIRCLE.flagBases },
+    insanity: { name:'INSANITY', desc:'Circular 100x100 maze: ring after ring of winding corridors. Spawn rooms around the outside', obstacles: INSANITY.obstacles, size: INSANITY.size, zones: INSANITY.zones, fine: true, tight: true, flagBases: INSANITY.flagBases },
+    circle: { name:'CIRCLE MAZE', desc:'Round 3000px disc maze, open room in the middle. Spawn rooms ring the outside', obstacles: CIRCLE.obstacles, size: CIRCLE.size, zones: CIRCLE.zones, fine: true, tight: true, flagBases: CIRCLE.flagBases },
     tetris: { name:'TETRIS', desc:'Blocks rain down and vanish on landing. Shoot them or get hit.', obstacles:[],
       colored:[[0,1350,300,75,'#22d3ee'],[300,1425,150,75,'#facc15'],[450,1350,225,75,'#a855f7'],[675,1425,225,75,'#22c55e'],
                [900,1350,225,75,'#3b82f6'],[1125,1425,225,75,'#f97316'],[1350,1350,150,150,'#ef4444'],
@@ -4635,7 +4670,13 @@
     // obstacles
     bctx.fillStyle = pal.obstacleFill;
     bctx.strokeStyle = pal.obstacleStroke;
-    OBSTACLES.forEach(o=>{
+    if (MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].fine){
+      // fine-grid curved mazes: stroke every piece first, then fill on top, so only the outer outline of the walls remains
+      bctx.lineJoin = 'round'; bctx.lineWidth = 3;
+      OBSTACLES.forEach(o=>bctx.strokeRect(o.x,o.y,o.w,o.h));
+      OBSTACLES.forEach(o=>bctx.fillRect(o.x-0.3,o.y-0.3,o.w+0.6,o.h+0.6));
+      bctx.lineWidth = 1;
+    } else OBSTACLES.forEach(o=>{
       bctx.fillRect(o.x,o.y,o.w,o.h);
       bctx.strokeRect(o.x+0.5,o.y+0.5,o.w-1,o.h-1);
     });
