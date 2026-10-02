@@ -1421,10 +1421,11 @@
       {x:80,y:930,w:70,h:70},{x:520,y:650,w:70,h:70},{x:1240,y:80,w:50,h:50},
       {x:490,y:470,w:50,h:50},{x:690,y:660,w:50,h:50}
   ];
-  // LOST ENDS: a gigantic 100 x 100 square (3000 x 3000 px) maze. Walls are 1 square thick, corridors 2 squares wide.
-  function buildLostEnds(){
+  // A gigantic 100 x 100 square (3000 x 3000 px) maze. Walls are 1 square thick, corridors 2 squares wide.
+  // Each map passes its own seed (so every map has its own layout) and loop chance (higher = more open).
+  function buildMaze(seed, loopChance){
     const C = 33, S = 100, SQ = 30;
-    const rng = ttRng(0x10575E7D);
+    const rng = ttRng(seed);
     const wall = []; for (let v = 0; v < S; v++) wall.push(new Uint8Array(S).fill(1));
     const openCell = (i, j) => { for (let dv = 0; dv < 2; dv++) for (let du = 0; du < 2; du++) wall[1 + 3*j + dv][1 + 3*i + du] = 0; };
     const openLink = (i, j, di, dj) => {   // knock out the wall between cell (i,j) and its neighbour
@@ -1444,8 +1445,8 @@
     }
     // a few extra openings so the maze has some loops and isn't one single path
     for (let j = 0; j < C; j++) for (let i = 0; i < C; i++){
-      if (i < C-1 && rng() < 0.05 && wall[1+3*j][3+3*i]) openLink(i, j, 1, 0);
-      if (j < C-1 && rng() < 0.05 && wall[3+3*j][1+3*i]) openLink(i, j, 0, 1);
+      if (i < C-1 && rng() < loopChance && wall[1+3*j][3+3*i]) openLink(i, j, 1, 0);
+      if (j < C-1 && rng() < loopChance && wall[3+3*j][1+3*i]) openLink(i, j, 0, 1);
     }
     // spawn rooms: 2x2-cell open rooms along all four sides (3 per side)
     const zones = [], mid = [3, 15, 27];
@@ -1466,7 +1467,99 @@
     return { obstacles, zones, size: S * SQ };
   }
   
-  const LOST_ENDS = buildLostEnds();
+  // INSANITY: a circular 100 x 100 (3000 x 3000 px) maze -- concentric rings split into cells, wound into one big
+  // labyrinth (recursive backtracker) and rasterised onto a fine grid so it still works with plain rectangles.
+  function buildCircleMaze(cfg){
+    const SIZE = 3000, SQ = 20, S = SIZE / SQ, CX = SIZE / 2, CY = SIZE / 2, TAU = Math.PI * 2;
+    const RW = cfg.RW, RINGS = cfg.RINGS, HALF = 12;   // ring spacing, number of rings, half wall thickness
+    const rng = ttRng(cfg.seed);
+    // cells per ring: 1 in the middle, then doubling whenever cells would get too long
+    const N = [1];
+    for (let k = 1; k < RINGS; k++){ let n = k === 1 ? 6 : N[k - 1]; if (TAU * RW * (k + 0.5) / n > 230) n *= 2; N.push(n); }
+    // only cells that actually show inside the square arena take part in the maze
+    const vis = N.map((n, k) => { const a = new Uint8Array(n); for (let j = 0; j < n; j++){
+      let ok = 0;
+      for (let ai = 0; ai < 5 && !ok; ai++) for (let ri = 0; ri < 4 && !ok; ri++){
+        const th = (j + (ai + 0.5) / 5) * TAU / n, r = RW * k + 4 + (RW - 8) * ri / 3;
+        const x = CX + Math.cos(th) * r, y = CY + Math.sin(th) * r;
+        if (x > SQ && x < SIZE - SQ && y > SQ && y < SIZE - SQ) ok = 1;
+      }
+      a[j] = k === 0 ? 1 : ok;
+    } return a; });
+    const inLink = N.map(n => new Uint8Array(n)), ccwLink = N.map(n => new Uint8Array(n));
+    const parentOf = (k, j) => Math.floor(j * N[k - 1] / N[k]);
+    // neighbours as [ring, cell, linkSetter]
+    const nbrs = (k, j) => {
+      const n = N[k], out = [];
+      if (n > 1){
+        out.push([k, (j + 1) % n, () => { ccwLink[k][(j + 1) % n] = 1; }]);
+        out.push([k, (j + n - 1) % n, () => { ccwLink[k][j] = 1; }]);
+      }
+      if (k > 0) out.push([k - 1, parentOf(k, j), () => { inLink[k][j] = 1; }]);
+      if (k < RINGS - 1){
+        const m = N[k + 1];
+        if (m === n) out.push([k + 1, j, () => { inLink[k + 1][j] = 1; }]);
+        else { out.push([k + 1, 2 * j, () => { inLink[k + 1][2 * j] = 1; }]); out.push([k + 1, 2 * j + 1, () => { inLink[k + 1][2 * j + 1] = 1; }]); }
+      }
+      return out.filter(t => vis[t[0]][t[1]]);
+    };
+    const seen = N.map(n => new Uint8Array(n)); seen[0][0] = 1;
+    const stack = [[0, 0]];
+    while (stack.length){
+      const [k, j] = stack[stack.length - 1];
+      const opts = nbrs(k, j).filter(t => !seen[t[0]][t[1]]);
+      if (!opts.length){ stack.pop(); continue; }
+      const t = opts[Math.floor(rng() * opts.length)];
+      t[2](); seen[t[0]][t[1]] = 1; stack.push([t[0], t[1]]);
+    }
+    // a few extra openings so there are some loops
+    for (let k = 1; k < RINGS; k++) for (let j = 0; j < N[k]; j++){
+      if (!vis[k][j]) continue;
+      if (rng() < 0.04 && vis[k][(j + 1) % N[k]]) ccwLink[k][(j + 1) % N[k]] = 1;
+      if (rng() < 0.04) inLink[k][j] = 1;
+    }
+    // rasterise: a square is wall if it lies on a ring wall or a radial wall that hasn't been opened
+    const wall = []; for (let v = 0; v < S; v++) wall.push(new Uint8Array(S));
+    for (let v = 0; v < S; v++) for (let u = 0; u < S; u++){
+      if (u === 0 || v === 0 || u === S - 1 || v === S - 1){ wall[v][u] = 1; continue; }
+      const dx = (u + 0.5) * SQ - CX, dy = (v + 0.5) * SQ - CY, rho = Math.hypot(dx, dy);
+      if (cfg.disc && rho > RW * RINGS - HALF){ wall[v][u] = 1; continue; }   // round arena: solid outside the outer ring
+      let th = Math.atan2(dy, dx); if (th < 0) th += TAU;
+      const kb = Math.round(rho / RW);
+      if (kb >= 1 && kb < RINGS && Math.abs(rho - RW * kb) < HALF){
+        const j = Math.min(N[kb] - 1, Math.floor(th / TAU * N[kb]));
+        if (!inLink[kb][j]){ wall[v][u] = 1; continue; }
+      }
+      const k = Math.floor(rho / RW);
+      if (k >= 1 && k < RINGS && N[k] > 1){
+        const uu = th / TAU * N[k], jn = Math.round(uu);
+        if (rho * Math.abs(uu - jn) * TAU / N[k] < HALF && !ccwLink[k][jn % N[k]]) wall[v][u] = 1;
+      }
+    }
+    // 12 open spawn rooms (7 x 7 squares) ringed around the outside
+    const zones = [];
+    for (let i = 0; i < 12; i++){
+      const a = (15 + 30 * i) * Math.PI / 180;
+      const cu = Math.floor((CX + Math.cos(a) * cfg.roomR) / SQ), cv = Math.floor((CY + Math.sin(a) * cfg.roomR) / SQ);
+      for (let v = cv - 3; v <= cv + 3; v++) for (let u = cu - 3; u <= cu + 3; u++) wall[v][u] = 0;
+      zones.push({ x: (cu + 0.5) * SQ, y: (cv + 0.5) * SQ });
+    }
+    // merge wall squares into as few rectangles as possible
+    const obstacles = [], active = {};
+    for (let v = 0; v <= S; v++){
+      const runs = [];
+      if (v < S){ let u = 0; while (u < S){ if (!wall[v][u]){ u++; continue; } let e = u; while (e < S && wall[v][e]) e++; runs.push([u, e - u]); u = e; } }
+      const keys = new Set(runs.map(r => r[0] + '_' + r[1]));
+      for (const key of Object.keys(active)){ if (!keys.has(key)){ obstacles.push(active[key]); delete active[key]; } }
+      for (const [u, len] of runs){ const key = u + '_' + len; if (active[key]) active[key].h += SQ; else active[key] = { x: u * SQ, y: v * SQ, w: len * SQ, h: SQ }; }
+    }
+    return { obstacles, zones, size: SIZE, flagBases: { red: zones[0], blue: zones[6] } };
+  }
+
+  const LOST_ENDS = buildMaze(0x10575E7D, 0.05);
+  const INSANITY = buildCircleMaze({ seed: 0x1A5A17, RW: 105, RINGS: 21, roomR: 1350, disc: false });
+  // CIRCLE MAZE: a round arena -- one big disc-shaped maze with an open room in the middle, solid outside the outer ring
+  const CIRCLE = buildCircleMaze({ seed: 0xC12C1E, RW: 100, RINGS: 15, roomR: 1220, disc: true });
   const MAPS = {
     crossfire: { name:'CROSSFIRE RUINS', desc:'L and T walls everywhere', obstacles: CLASSIC_OBSTACLES },
     flats: { name:'OPEN FLATS', desc:'Fewer, bigger L and T walls', obstacles:[
@@ -1501,6 +1594,8 @@
       {x:510,y:0,w:30,h:390},{x:510,y:1110,w:30,h:390},{x:660,y:0,w:30,h:390},{x:660,y:1110,w:30,h:390},{x:810,y:0,w:30,h:390},{x:810,y:1110,w:30,h:390},{x:960,y:0,w:30,h:390},{x:960,y:1110,w:30,h:390},{x:0,y:510,w:390,h:30},{x:1110,y:510,w:390,h:30},{x:0,y:660,w:390,h:30},{x:1110,y:660,w:390,h:30},{x:0,y:810,w:390,h:30},{x:1110,y:810,w:390,h:30},{x:0,y:960,w:390,h:30},{x:1110,y:960,w:390,h:30},{x:240,y:0,w:30,h:210},{x:1230,y:0,w:30,h:210},{x:240,y:1290,w:30,h:210},{x:1230,y:1290,w:30,h:210},{x:570,y:570,w:120,h:30},{x:810,y:570,w:120,h:30},{x:570,y:900,w:120,h:30},{x:810,y:900,w:120,h:30},{x:570,y:570,w:30,h:120},{x:570,y:810,w:30,h:120},{x:900,y:570,w:30,h:120},{x:900,y:810,w:30,h:120},{x:720,y:720,w:60,h:60},{x:330,y:330,w:60,h:60},{x:1110,y:330,w:60,h:60},{x:330,y:1110,w:60,h:60},{x:1110,y:1110,w:60,h:60}
     ] },
     lostends: { name:'LOST ENDS', desc:'Gigantic 100x100 maze. Spawn at the sides; teams start together', obstacles: LOST_ENDS.obstacles, size: LOST_ENDS.size, zones: LOST_ENDS.zones, tight: true },
+    insanity: { name:'INSANITY', desc:'Circular 100x100 maze: ring after ring of winding corridors. Spawn rooms around the outside', obstacles: INSANITY.obstacles, size: INSANITY.size, zones: INSANITY.zones, tight: true, flagBases: INSANITY.flagBases },
+    circle: { name:'CIRCLE MAZE', desc:'Round 3000px disc maze, open room in the middle. Spawn rooms ring the outside', obstacles: CIRCLE.obstacles, size: CIRCLE.size, zones: CIRCLE.zones, tight: true, flagBases: CIRCLE.flagBases },
     tetris: { name:'TETRIS', desc:'Blocks rain down and vanish on landing. Shoot them or get hit.', obstacles:[],
       colored:[[0,1350,300,75,'#22d3ee'],[300,1425,150,75,'#facc15'],[450,1350,225,75,'#a855f7'],[675,1425,225,75,'#22c55e'],
                [900,1350,225,75,'#3b82f6'],[1125,1425,225,75,'#f97316'],[1350,1350,150,150,'#ef4444'],
@@ -1521,6 +1616,35 @@
     ] },
   };
 
+  // EXTENDED maps: the classic layouts blown up to 3000 x 3000 px (100 x 100 squares) -- same walls, four times the room.
+  // The 1500px layout is mirrored into all four quadrants (so it still joins up seamlessly); FORTRESS is scaled up instead,
+  // so it stays one huge bunker with its kill-zone floor in the middle. TETRIS, TETRIS YARD, DEAD ENDS, LOST ENDS and INSANITY are left alone.
+  (function extendClassicMaps(){
+    const BIG = 3000;
+    const mirror4 = list => {
+      const out = [];
+      list.forEach(o => {
+        out.push({ x: o.x, y: o.y, w: o.w, h: o.h });
+        out.push({ x: BIG - o.x - o.w, y: o.y, w: o.w, h: o.h });
+        out.push({ x: o.x, y: BIG - o.y - o.h, w: o.w, h: o.h });
+        out.push({ x: BIG - o.x - o.w, y: BIG - o.y - o.h, w: o.w, h: o.h });
+      });
+      return out;
+    };
+    const FLAGS = { red: { x: 750, y: 98 }, blue: { x: BIG - 750, y: BIG - 98 } };   // opposite corners of the big arena
+    ['crossfire', 'flats', 'bunkers', 'cross', 'maze'].forEach(id => {
+      const m = MAPS[id];
+      m.obstacles = mirror4(m.obstacles);
+      m.size = BIG; m.flagBases = FLAGS;
+      m.desc = 'EXTENDED \u2014 ' + m.desc;
+    });
+    const f = MAPS.fortress;
+    f.obstacles = f.obstacles.map(o => ({ x: o.x * 2, y: o.y * 2, w: o.w * 2, h: o.h * 2 }));
+    f.hazards = f.hazards.map(o => ({ x: o.x * 2, y: o.y * 2, w: o.w * 2, h: o.h * 2 }));
+    f.size = BIG; f.flagBases = FLAGS;
+    f.desc = 'EXTENDED \u2014 ' + f.desc;
+  })();
+
   const HOST_CAPS = [2,3,4,6,8,9,10,12,14,16,18,20];
   // Player-count choices per mode. FFA and 2 TEAMS rooms hold up to 20. Showdown is stricter:
   // DUO = pairs (even head-count), TRIO = threes (3 / 6 / 9, at least 2 teams to start); a bot fills any gap.
@@ -1533,7 +1657,7 @@
   }
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdFmt:'solo' };   // sdFmt: 'solo' | 'duo' | 'trio'
-  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze','deadends','lostends'];
+  const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze','deadends','lostends','insanity','circle'];
   let OBSTACLES = CLASSIC_OBSTACLES;
 
   // ---- TETRIS map state (see the TETRIS section above applyMap) ----
@@ -1587,6 +1711,7 @@
   // CTF flag bases -- reuse two of the guaranteed-clear SPAWNS points at
   // opposite ends of the map so flags never land inside an obstacle.
   const FLAG_BASES = { red: {x:750,y:98}, blue: {x:750,y:1402} };
+  function flagBase(team){ const fb = MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].flagBases; return (fb || FLAG_BASES)[team]; }
   const FLAG_R = TANK_R + 24;       // pickup / capture radius
   const CAPTURES_TO_WIN = 3;        // just triggers an announcement -- hosted rooms stay untimed & playable after
 
@@ -3247,7 +3372,7 @@
       const s = state.remoteSmooth[carrier.peer];
       return { x: s ? s.x : carrier.presence.x, y: s ? s.y : carrier.presence.y, carrier: carrier.peer };
     }
-    const base = FLAG_BASES[team];
+    const base = flagBase(team);
     return { x: base.x, y: base.y, carrier: null };
   }
   function updateFlags(){
@@ -3263,7 +3388,7 @@
         state.room.emit('flagEvent', { kind:'pickup', team: enemy, name: state.name, roomId: state.currentSector });
       }
     } else {
-      const base = FLAG_BASES[state.team];
+      const base = flagBase(state.team);
       const dx = state.x - base.x, dy = state.y - base.y;
       if (dx*dx + dy*dy < FLAG_R*FLAG_R){
         state.carrying = null;
@@ -3606,6 +3731,13 @@
   }
   // random spawn that keeps away from living players; CTF keeps the classic spots (flags sit on them)
   function pickSpawnPoint(){
+    if (state.roomMode === 'ctf' && state.team && mapHasZones()) return teamSlot(flagBase(state.team), Math.floor(Math.random() * 3), 3);   // maze: respawn in your own flag room
+    if (state.roomMode === 'ctf' && state.team && !mapHasZones() && MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].flagBases){
+      // extended map: red spawns in the top-left quadrant, blue in the mirrored bottom-right one
+      const okPts = SPAWNS.filter(p => !HAZARDS.some(h => p.x > h.x - 40 && p.x < h.x + h.w + 40 && p.y > h.y - 40 && p.y < h.y + h.h + 40));   // fortress: never the kill-zone floor
+      const sp = okPts[Math.floor(Math.random() * okPts.length)], flip = state.team === TEAM_IDS[1];
+      return flip ? { x: ARENA_W - sp.x, y: ARENA_H - sp.y } : { x: sp.x, y: sp.y };
+    }
     const pts = state.roomMode === 'ctf' ? SPAWNS : mapSpawnPoints();
     const foes = state.currentSector ? peersIn(state.currentSector).filter(p => !p.isMe && p.presence.alive !== false && p.presence.x !== undefined) : [];
     const dist = pt => foes.length ? Math.min(...foes.map(p => Math.hypot(p.presence.x - pt.x, p.presence.y - pt.y))) : 9999;
@@ -3774,7 +3906,7 @@
   function cw(){ return state.sd || state.lc; }
   function lcInit(){
     state.lc = null;
-    if (ACTIVE_MAP !== 'lostends') return;
+    if (!(MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].tight)) return;   // every maze map
     const sector = state.currentSector;
     state.lc = { chests: sdBuildChests(sector, capOf(sector)), pickups: [], over: false };
   }
