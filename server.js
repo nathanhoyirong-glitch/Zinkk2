@@ -155,7 +155,7 @@ function sanitizePresence(d) {
     else d.roomMeta = {
       name: String(m.name || 'CUSTOM ROOM').slice(0, 20),
       map: KNOWN_MAPS.has(m.map) ? m.map : 'crossfire',
-      cap: Math.max(2, Math.min(10, parseInt(m.cap, 10) || 4)),
+      cap: Math.max(2, Math.min(20, parseInt(m.cap, 10) || 4)),   // FFA / 2 TEAMS rooms hold up to 20
       mode: KNOWN_MODES.has(m.mode) ? m.mode : 'ffa',
       // Showdown format: false = solo, 'duo' = teams of 2, 'trio' = teams of 3 (ignored for every other mode)
       teams: m.mode === 'showdown' ? (m.teams === 'trio' ? 'trio' : (m.teams === 'duo' || m.teams === true) ? 'duo' : false) : false,

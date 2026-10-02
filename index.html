@@ -347,6 +347,7 @@
   }
   #settingsResetBtn { width:100%; margin-top:24px; }
   .theme-toggle { display:flex; gap:8px; }
+  #hostCapToggle { flex-wrap:wrap; }
   .theme-btn {
     flex:1; padding:9px; font-family:var(--mono); font-size:12px; letter-spacing:0.06em;
     background:var(--panel-2); border:1px solid var(--line-bright); color:var(--ink-dim);
@@ -1510,7 +1511,15 @@
     ] },
   };
 
-  const HOST_CAPS = [2,4,6,8,9,10];   // 9 is only offered for Showdown TRIO (3 teams of 3)
+  const HOST_CAPS = [2,3,4,6,8,9,10,12,14,16,18,20];
+  // Player-count choices per mode. FFA and 2 TEAMS rooms hold up to 20. Showdown is stricter:
+  // DUO = pairs (even head-count), TRIO = threes (3 / 6 / 9, at least 2 teams to start); a bot fills any gap.
+  function capChoices(mode, fmt){
+    if (mode === 'ffa' || mode === 'teams') return [2,4,6,8,10,12,14,16,18,20];
+    if (mode === 'showdown' && fmt === 'trio') return [3,6,9];
+    if (mode === 'showdown' && fmt === 'duo') return [4,6,8,10];
+    return [2,4,6,8,10];
+  }
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdFmt:'solo' };   // sdFmt: 'solo' | 'duo' | 'trio'
   const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze','deadends','lostends'];
@@ -1618,6 +1627,7 @@
     waitingToStart: false, // true while sitting in a hosted room's pre-start lobby
     roomMode: null,       // 'ffa' | 'teams' | 'ctf' (only meaningful while currentSector is set)
     sd: null, sdOut: false, sdTeams: false, sdTeamSize: 0, unsubSd: null,   // Showdown runtime
+    bots: [], botSyncAt: 0,   // Showdown bots simulated by the room host (see BOT section)
     team: null,           // 'red' | 'blue' | null -- assigned on join in team modes, forced FFA otherwise
     carrying: null,       // 'red' | 'blue' | null -- which flag I'm currently carrying (CTF)
     captures: 0,          // my flag captures this room stay
@@ -1993,6 +2003,21 @@
     return target;
   }
 
+  // Showdown bots are simulated by their room's host and published in presence.bots. Turn them back
+  // into ordinary peers (isBot) so every client draws, shoots, scores and counts them like a player.
+  function addBotPeers(list){
+    const extra = [];
+    list.forEach(p=>{
+      const bs = p.presence && p.presence.bots, rid = p.presence && p.presence.roomId;
+      if (!Array.isArray(bs) || !rid) return;
+      const src = (p.isMe && state.bots && state.bots.length) ? state.bots : bs;   // the host reads its own live copy
+      src.forEach(b=>extra.push({ peer: 'bot-' + p.peer + '-' + b.n, isMe: false, isBot: true, host: p.peer, presence: {
+        roomId: rid, name: b.name, color: b.team || 'red', team: b.team, x: b.x, y: b.y, turretAngle: b.a,
+        hp: b.hp, maxHp: b.mh, alive: b.alive !== false, score: 0, streak: 0, joinedAt: 1e15 + b.n } }));
+    });
+    extra.forEach(e=>list.push(e));
+  }
+
   function connectWSRoom(url){
     let ws = null;
     let myPeer = null;
@@ -2048,6 +2073,7 @@
           }
         } else if (msg.type === 'peers'){
           peersList = (msg.list||[]).map(p=>({ peer: p.peer, isMe: p.peer === myPeer, presence: p.presence||{} }));
+          addBotPeers(peersList);
           firePeers();
         } else if (msg.type === 'match' || msg.type === 'matchEnd' || msg.type === 'adminResult' || msg.type === 'adminKill' || msg.type === 'adminBanList' || msg.type === 'adminUnbanResult' ||
                    msg.type === 'authResult' || msg.type === 'leaderboard' || msg.type === 'accountKills' || msg.type === 'accountDeleted' || msg.type === 'adminDeleteResult' || msg.type === 'adminBanResult'){
@@ -2435,6 +2461,7 @@
     const sdRoom = !!(meta && meta.mode === 'showdown');
     const sdProblem = sdRoom ? sdCountProblem(list.length, meta) : '';
     const sdOdd = !!sdProblem;
+    const nBots = sdRoom ? sdBotsNeeded(list.length, meta) : 0;
     const oddMsg = sdProblem;
     if (iAmHost){
       if (list.length < MIN_HOST_START_PLAYERS){
@@ -2445,11 +2472,12 @@
         statusEl.textContent = oddMsg;
       } else {
         startBtn.style.display = 'block';
-        statusEl.textContent = sdRoom ? ('Last ' + (meta.teams ? 'team' : 'player') + ' standing wins.') : '';
+        startBtn.textContent = nBots ? 'START MATCH (+' + nBots + ' BOT' + (nBots > 1 ? 'S' : '') + ')' : 'START MATCH';
+        statusEl.textContent = sdRoom ? ('Last ' + (meta.teams ? 'team' : 'player') + ' standing wins.' + (nBots ? ' ' + nBots + ' bot' + (nBots > 1 ? 's' : '') + ' will fill the empty seat' + (nBots > 1 ? 's' : '') + '.' : '')) : '';
       }
     } else {
       startBtn.style.display = 'none';
-      statusEl.textContent = sdOdd ? oddMsg : ('Waiting for ' + (host ? (host.presence.name || 'the host') : 'the host') + ' to start the match\u2026');
+      statusEl.textContent = sdOdd ? oddMsg : ('Waiting for ' + (host ? (host.presence.name || 'the host') : 'the host') + ' to start the match' + (nBots ? ' (' + nBots + ' bot' + (nBots > 1 ? 's' : '') + ' will join)' : '') + '\u2026');
     }
   }
   // Re-checked on every presence tick while waiting: picks up the host
@@ -2463,8 +2491,13 @@
   byId('waitStartBtn').addEventListener('click', ()=>{
     if (!state.waitingToStart || !state.currentSector) return;
     const meta = getRoomMeta(state.currentSector) || normMeta(null);
-    if (meta.mode === 'showdown'){ const prob = sdCountProblem(peersIn(state.currentSector).length, meta); if (prob){ showToast(prob); return; } }
-    state.room.presence({ roomMeta: Object.assign({}, meta, { started: true }) });
+    state.bots = [];
+    if (meta.mode === 'showdown'){
+      const humans = peersIn(state.currentSector).filter(p => !p.isBot).sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
+      const prob = sdCountProblem(humans.length, meta); if (prob){ showToast(prob); return; }
+      state.bots = sdBotPlan(humans, meta);   // duo / trio: bots fill the empty seats
+    }
+    state.room.presence({ roomMeta: Object.assign({}, meta, { started: true }), bots: state.bots.length ? state.bots.map(botSlim) : null });
   });
   byId('waitLeaveBtn').addEventListener('click', leaveSector);
 
@@ -2487,7 +2520,9 @@
     const unsubHit = state.room.on('bulletHit', (msg)=>{
       if (msg.sameTab) return;
       const d = msg.data || {};
-      if (d.roomId !== state.currentSector || d.victimId !== state.myPeerId) return;
+      if (d.roomId !== state.currentSector) return;
+      if (isMyBotId(d.victimId)){ botHit(d.victimId, d.bulletId, d.shooterId, d.shooterName, Number(d.damage) || DAMAGE); return; }   // a human shot one of my bots
+      if (d.victimId !== state.myPeerId) return;
       if (d.shooterId === state.myPeerId) return;
       const sp = peersIn(state.currentSector).find(p=>p.peer === d.shooterId);
       if (sp && state.team && sp.presence.team && sp.presence.team === state.team) return;   // no friendly fire
@@ -2506,12 +2541,7 @@
     state.unsubKill = state.room.on('kill', (msg)=>{
       const d = msg.data || {};
       if (d.roomId !== state.currentSector) return;
-      pushKillfeed((d.shooterName||'?') + ' downed ' + (d.victimName||'?'));
-      spawnSpark(d.x, d.y, '#e3a857', 1);
-      if (d.shooterId === state.myPeerId){
-        creditKills(1, false);
-      }
-      renderScoreStrip();
+      onKillEvent(d);
     });
 
     state.unsubFlag = state.room.on('flagEvent', (msg)=>{
@@ -2553,6 +2583,15 @@
       state.sd.pickups = state.sd.pickups.filter(p => p.id !== d.id);
     });
     state.unsubSd = ()=>{ unsubChestHit(); unsubChestOpen(); unsubHeal(); };
+  }
+
+  function onKillEvent(d){
+    pushKillfeed((d.shooterName||'?') + ' downed ' + (d.victimName||'?'));
+    spawnSpark(d.x, d.y, '#e3a857', 1);
+    if (d.shooterId === state.myPeerId){
+      creditKills(1, false);
+    }
+    renderScoreStrip();
   }
 
   function spawnBullet(id, shooterId, shooterName, x, y, angle, color, speed, damage, square, shooterTeam, pierce, radius, fw){
@@ -3232,6 +3271,7 @@
   function update(dt){
     if (ACTIVE_MAP === 'tetris') ttUpdate();
     if (state.sd) sdUpdate(dt);
+    if (state.bots.length) botsUpdate(dt);
     updateRemoteSmoothing(dt);
     updateRemoteDrones(dt);
     if (state.alive) updateDrones(dt);
@@ -3346,7 +3386,10 @@
           }
           if (hit){
             spawnSpark(b.x,b.y,b.color);
-            if (p.isMe && state.alive && b.shooterId !== state.myPeerId){
+            if (p.isBot && p.host === state.myPeerId){
+              // one of MY bots (I simulate it): I apply hits from me and my other bots; other humans report theirs by bulletHit
+              if (b.shooterId === state.myPeerId || isMyBotId(b.shooterId)) botHit(p.peer, b.id, b.shooterId, b.shooterName, b.damage);
+            } else if (p.isMe && state.alive && b.shooterId !== state.myPeerId){
               claimBulletHit(b.id, b.shooterId, b.shooterName, b.damage);
             } else if (!p.isMe && b.shooterId === state.myPeerId && state.room){
               // I fired this and it reached them on MY screen -- tell them, so
@@ -3693,6 +3736,7 @@
     };
     state.sdOut = false;
     sdPlaceAtStart();
+    if (state.bots.length) botsPlace();
     state.invincibleUntil = performance.now() + 3000;   // clocks differ a little between players -- short grace at the bell
     byId('sdSpec').classList.remove('show');
     showToast('SHOWDOWN \u2014 shoot crates for upgrades. Poison smoke is coming from every wall!');
@@ -3872,17 +3916,202 @@
     }
   }
 
+  // ---------------------------------------------------------------
+  // SHOWDOWN BOTS -- fill the empty seats of a duo / trio match.
+  // The room host simulates them (movement, aiming, shooting, damage, respawns) and publishes
+  // them in presence.bots; addBotPeers() turns that back into ordinary peers on every client.
+  // Humans shoot bots exactly like players: the shooter's client sends 'bulletHit' and the host applies it.
+  // ---------------------------------------------------------------
+  const BOT = { SPEED: 215, FIRE_MS: 950, DMG: 20, ERR: 0.14, SEE: 720, KEEP_MIN: 200, KEEP_MAX: 400, TURN: 6 };
+  function botId(b){ return 'bot-' + state.myPeerId + '-' + b.n; }
+  function isMyBotId(id){ return typeof id === 'string' && !!state.myPeerId && id.indexOf('bot-' + state.myPeerId + '-') === 0; }
+  function botSlim(b){
+    const r = Math.round;
+    return { n: b.n, name: b.name, team: b.team, x: b.x === undefined ? undefined : r(b.x), y: b.y === undefined ? undefined : r(b.y),
+             a: r((b.a || 0) * 100) / 100, hp: r(b.hp), mh: b.mh, alive: b.alive };
+  }
+  function botSync(){ if (state.room) state.room.presence({ bots: state.bots.map(botSlim) }); }
+
+  // which team each bot joins: top up unfinished teams first, then whole extra teams until there are 2+
+  function sdBotPlan(humans, meta){
+    const size = sdSizeOfMeta(meta), need = sdBotsNeeded(humans.length, meta), out = [];
+    if (!size || !need) return out;
+    const per = {};   // humans per team (teams follow join order: 1st pair/trio = red, 2nd = blue, ...)
+    humans.forEach((p, i) => { const t = SD_TEAM_IDS[Math.floor(i / size) % SD_TEAM_IDS.length]; per[t] = (per[t] || 0) + 1; });
+    const teamCount = (humans.length + need) / size;
+    for (let ti = 0; ti < teamCount && out.length < need; ti++){
+      const t = SD_TEAM_IDS[ti % SD_TEAM_IDS.length];
+      for (let k = per[t] || 0; k < size && out.length < need; k++)
+        out.push({ n: out.length, name: 'BOT ' + (out.length + 1), team: t, hp: MAX_HP, mh: MAX_HP, alive: true });
+    }
+    return out;
+  }
+
+  // same spawn rules the human players use (sdPlaceAtStart), so bots never stack on a player
+  function botsPlace(){
+    const now = performance.now();
+    const humans = peersIn(state.currentSector).filter(p => !p.isBot).sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
+    const all = humans.map(p => ({ team: p.isMe ? state.team : p.presence.team, bot: null })).concat(state.bots.map(b => ({ team: b.team, bot: b })));
+    state.bots.forEach(b => {
+      let sp;
+      if (mapHasZones()){
+        const mates = all.filter(e => e.team === b.team);
+        sp = teamSlot(sdSpreadSpawn(Math.max(0, SD_TEAM_IDS.indexOf(b.team))), mates.findIndex(e => e.bot === b), state.sdTeamSize);
+      } else sp = sdSpreadSpawn(all.findIndex(e => e.bot === b));
+      b.x = sp.x; b.y = sp.y; b.a = Math.atan2(ARENA_H / 2 - sp.y, ARENA_W / 2 - sp.x);
+      b.hp = b.mh; b.alive = true; b.inv = now + 3000; b.dir = Math.random() < 0.5 ? 1 : -1; b.flipAt = 0;
+      b.nextShot = now + 1500 + Math.random() * 800; b.poisonAcc = 0; b.respawnAt = 0; b.wander = 0; b.wanderA = 0; b.stuck = 0;
+    });
+    botSync();
+  }
+
+  function botLOS(ax, ay, bx, by){
+    const n = Math.ceil(Math.hypot(bx - ax, by - ay) / 30);
+    for (let i = 1; i < n; i++){
+      const x = ax + (bx - ax) * i / n, y = ay + (by - ay) * i / n;
+      for (const o of OBSTACLES) if (rectCircleCollide(x, y, 3, o)) return false;
+    }
+    return true;
+  }
+
+  function botFire(b){
+    const ang = b.a + (Math.random() - 0.5) * 2 * BOT.ERR;
+    const x = b.x + Math.cos(ang) * (TANK_R + 12), y = b.y + Math.sin(ang) * (TANK_R + 12);
+    const id = botId(b) + '-' + Math.floor(performance.now()) + '-' + Math.floor(Math.random() * 1000);
+    spawnBullet(id, botId(b), b.name, x, y, ang, colorHex(b.team), BULLET_SPEED, BOT.DMG, false, b.team, 0, BULLET_R, false);
+    state.room.emit('shoot', { shots: [{ id, x, y, angle: ang, r: BULLET_R }], shooterId: botId(b), shooterName: b.name,
+      color: b.team, team: b.team, roomId: state.currentSector, speed: BULLET_SPEED, damage: BOT.DMG, square: false, pierce: 0 });
+  }
+
+  function botHit(peerId, bulletId, shooterId, shooterName, dmg){
+    const b = state.bots.find(x => botId(x) === peerId);
+    if (!b || !b.alive) return;
+    if (bulletId){
+      if (appliedBulletHits.has(bulletId)) return;       // same bullet reported by both sides: count once
+      appliedBulletHits.set(bulletId, performance.now());
+    }
+    const sp = peersIn(state.currentSector).find(p => p.peer === shooterId);
+    if (sp && sp.presence.team && sp.presence.team === b.team) return;   // no friendly fire
+    botDamage(b, dmg || DAMAGE, shooterId, shooterName);
+  }
+
+  function botDamage(b, dmg, shooterId, shooterName){
+    const now = performance.now();
+    if (!b.alive || now < b.inv) return;
+    b.hp = Math.max(0, b.hp - dmg);
+    if (b.hp > 0) return;
+    b.alive = false;
+    const ev = { shooterId: shooterId || null, shooterName: shooterName || 'THE SMOKE', victimId: botId(b), victimName: b.name, x: b.x, y: b.y, roomId: state.currentSector };
+    state.room.emit('kill', ev);
+    onKillEvent(ev);                                        // the server never echoes my own emits back
+    const mateUp = state.bots.some(o => o !== b && o.team === b.team && o.alive) ||
+      peersIn(state.currentSector).some(p => !p.isBot && (p.isMe ? state.team : p.presence.team) === b.team && (p.isMe ? state.alive : p.presence.alive !== false));
+    b.respawnAt = mateUp ? now + SD.TEAM_RESPAWN_MS : 0;   // same rule as players: back after 10s if a teammate lives
+    botSync();
+  }
+
+  function botRespawn(b, tanks){
+    const mate = tanks.find(t => t.alive && t.team === b.team && t.bot !== b);
+    if (!mate){ b.respawnAt = 0; return; }
+    let px = mate.x, py = mate.y;
+    outer: for (const dist of [70, 50, 90, 120]){
+      for (let k = 0; k < 8; k++){
+        const a = Math.random() * Math.PI * 2, x = mate.x + Math.cos(a) * dist, y = mate.y + Math.sin(a) * dist;
+        if (canOccupy(x, y)){ px = x; py = y; break outer; }
+      }
+    }
+    b.x = px; b.y = py; b.hp = b.mh; b.alive = true; b.respawnAt = 0; b.inv = performance.now() + 3000; b.nextShot = performance.now() + 1200;
+  }
+
+  // per frame, host only
+  function botsUpdate(dt){
+    const sd = state.sd;
+    if (!sd || !state.currentSector || !state.bots.length) return;
+    const now = performance.now();
+    const tanks = [];
+    peersIn(state.currentSector).forEach(p => {
+      if (p.isBot) return;
+      const x = p.isMe ? state.x : p.presence.x, y = p.isMe ? state.y : p.presence.y;
+      if (x === undefined || y === undefined) return;
+      tanks.push({ id: p.peer, team: p.isMe ? state.team : p.presence.team, x, y, alive: p.isMe ? state.alive : p.presence.alive !== false });
+    });
+    state.bots.forEach(b => { if (b.x !== undefined) tanks.push({ id: botId(b), team: b.team, x: b.x, y: b.y, alive: b.alive, bot: b }); });
+    let dirty = false;
+    for (const b of state.bots){
+      if (b.x === undefined) continue;
+      if (!b.alive){
+        if (!sd.over && b.respawnAt){
+          if (!tanks.some(t => t.alive && t.team === b.team && t.bot !== b)) b.respawnAt = 0;
+          else if (now >= b.respawnAt){ botRespawn(b, tanks); dirty = true; }
+        }
+        continue;
+      }
+      if (sd.over) continue;
+      // nearest living enemy
+      let tgt = null, td = 1e9;
+      for (const t of tanks){
+        if (!t.alive || t.team === b.team || t.bot === b) continue;
+        const d = Math.hypot(t.x - b.x, t.y - b.y);
+        if (d < td){ td = d; tgt = t; }
+      }
+      // where to go
+      let mx = 0, my = 0;
+      const inSmoke = sdInSmoke(b.x, b.y);
+      if (inSmoke || sdInset() > 0 && (b.x < sdInset() + 90 || b.x > ARENA_W - sdInset() - 90 || b.y < sdInset() + 90 || b.y > ARENA_H - sdInset() - 90)){
+        const a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x); mx = Math.cos(a); my = Math.sin(a);   // run from the smoke
+      } else if (b.wander > now){
+        mx = Math.cos(b.wanderA); my = Math.sin(b.wanderA);                                              // got stuck: shake loose
+      } else if (tgt){
+        const a = Math.atan2(tgt.y - b.y, tgt.x - b.x);
+        if (td > BOT.KEEP_MAX){ mx = Math.cos(a); my = Math.sin(a); }
+        else if (td < BOT.KEEP_MIN){ mx = -Math.cos(a); my = -Math.sin(a); }
+        if (now > b.flipAt){ b.dir = -b.dir; b.flipAt = now + 700 + Math.random() * 1300; }
+        mx += -Math.sin(a) * b.dir * 0.8; my += Math.cos(a) * b.dir * 0.8;                              // strafe
+      } else {
+        const a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x); mx = Math.cos(a) * 0.5; my = Math.sin(a) * 0.5;
+      }
+      const len = Math.hypot(mx, my);
+      if (len > 0.01){
+        const nx = b.x + mx / len * BOT.SPEED * dt, ny = b.y + my / len * BOT.SPEED * dt;
+        let moved = false;
+        if (canOccupy(nx, b.y)){ b.x = nx; moved = true; }
+        if (canOccupy(b.x, ny)){ b.y = ny; moved = true; }
+        b.stuck = moved ? 0 : b.stuck + dt;
+        if (b.stuck > 0.35){ b.stuck = 0; b.wander = now + 600 + Math.random() * 500; b.wanderA = Math.random() * Math.PI * 2; b.dir = -b.dir; }
+      }
+      // aim + shoot
+      if (tgt && td < BOT.SEE){
+        const want = Math.atan2(tgt.y - b.y, tgt.x - b.x);
+        let da = want - b.a; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
+        b.a += Math.max(-BOT.TURN * dt, Math.min(BOT.TURN * dt, da));
+        if (Math.abs(da) < 0.25 && now >= b.nextShot && botLOS(b.x, b.y, tgt.x, tgt.y)){
+          b.nextShot = now + BOT.FIRE_MS * (0.9 + Math.random() * 0.4);
+          botFire(b);
+        }
+      } else if (len > 0.01) b.a = Math.atan2(my, mx);
+      // poison smoke hurts bots too
+      if (inSmoke){
+        b.poisonAcc += dt * 1000;
+        if (b.poisonAcc >= SD.TICK_MS){ b.poisonAcc -= SD.TICK_MS; botDamage(b, SD.POISON_DMG, null, 'THE SMOKE'); }
+      } else b.poisonAcc = 0;
+    }
+    if (dirty || now - state.botSyncAt > 60){ state.botSyncAt = now; botSync(); }
+  }
+
   function sdAlivePeers(){
     return peersIn(state.currentSector).filter(p => p.isMe ? state.alive : p.presence.alive !== false);
   }
   function sdTeamOf(p){ return p.isMe ? state.team : p.presence.team; }
-  // is the lobby head-count OK to start? returns '' or a message
+  // is the lobby head-count OK to start? returns '' or a message. Duo / trio never block: bots fill the gap (sdBotsNeeded).
   function sdCountProblem(n, meta){
     const size = sdSizeOfMeta(meta);
     if (!size) return n % 2 !== 0 ? 'Showdown needs an EVEN number of players (' + n + ' joined) \u2014 wait for one more.' : '';
-    if (n < size * 2) return (size === 2 ? 'Duo' : 'Trio') + ' needs at least ' + (size * 2) + ' players (' + n + ' joined).';
-    if (n % size !== 0) return 'Teams must be full \u2014 ' + size + ' per team (' + n + ' joined). Wait for ' + (size - n % size) + ' more.';
     return '';
+  }
+  // Duo = pairs, trio = threes, and there must always be at least 2 teams (duo 4, trio 6). Bots top up whatever is missing.
+  function sdBotsNeeded(n, meta){
+    const size = sdSizeOfMeta(meta);
+    return size ? Math.max(size * 2, Math.ceil(n / size) * size) - n : 0;
   }
   // teammates (not me) still alive
   function sdMatesAlive(){
@@ -4450,7 +4679,8 @@
     state.adminTank = null; closeCmd(); closeAdmin(); closeLogin(); closeChat();
     state.waitingToStart = false; closeWaitPanel();
     state.color = state.chosenColor;   // give back the colour the player picked (team rooms override it while inside)
-    if (state.room) state.room.presence({ roomId: null, roomMeta: null, adminTank: null, alive:false, team: null, carrying: null, color: state.chosenColor.id });
+    state.bots = [];
+    if (state.room) state.room.presence({ roomId: null, roomMeta: null, bots: null, adminTank: null, alive:false, team: null, carrying: null, color: state.chosenColor.id });
     if (state.unsubShoot) state.unsubShoot();
     if (state.unsubKill) state.unsubKill();
     if (state.unsubDrone) state.unsubDrone();
@@ -4664,9 +4894,13 @@
     // Showdown format: false = solo, 'duo' = teams of 2, 'trio' = teams of 3 (max 9 players)
     const teams = mode === 'showdown' && m ? (m.teams === 'trio' ? 'trio' : (m.teams === 'duo' || m.teams === true) ? 'duo' : false) : false;
     let capOk = HOST_CAPS.includes(cap) ? cap : 4;
-    if (teams === 'trio') capOk = (capOk === 6 || capOk === 9) ? capOk : 6;
-    else if (teams === 'duo') capOk = (capOk >= 4 && capOk % 2 === 0) ? capOk : 4;
-    else if (capOk === 9) capOk = 8;
+    if (teams === 'trio') capOk = (capOk === 3 || capOk === 6 || capOk === 9) ? capOk : 6;
+    else if (teams === 'duo') capOk = (capOk >= 4 && capOk <= 10 && capOk % 2 === 0) ? capOk : 4;
+    else {
+      if (capOk === 9) capOk = 8;
+      if (capOk === 3) capOk = 4;
+      if (mode !== 'ffa' && mode !== 'teams') capOk = Math.min(capOk, 10);   // only FFA / 2 TEAMS go up to 20
+    }
     return {
       name: String((m && m.name) || 'CUSTOM ROOM').slice(0,20).toUpperCase(),
       map,
@@ -4997,11 +5231,11 @@
     if (sdOn && SD_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
     if (hostDraft.mode === 'ctf' && CTF_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
     byId('hostSdRow').style.display = sdOn ? '' : 'none';
-    byId('hostSdName').textContent = hostDraft.sdFmt === 'trio' ? 'TRIO \u00b7 3 PER TEAM \u00b7 MAX 9' : hostDraft.sdFmt === 'duo' ? 'DUO \u00b7 2 PER TEAM' : 'SOLO';
+    byId('hostSdName').textContent = hostDraft.sdFmt === 'trio' ? 'TRIO \u00b7 3 PER TEAM \u00b7 MAX 9 \u00b7 BOTS FILL GAPS' : hostDraft.sdFmt === 'duo' ? 'DUO \u00b7 2 PER TEAM \u00b7 BOT FILLS AN ODD SEAT' : 'SOLO';
     byId('hostSdToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', el.dataset.fmt === hostDraft.sdFmt));
-    // player-count choices depend on the format (trio: 6 or 9; duo: 4-10 even; otherwise 2-10 even)
+    // player-count choices depend on the mode / format (see capChoices)
     const fmtNow = sdOn ? hostDraft.sdFmt : 'solo';
-    const validCaps = fmtNow === 'trio' ? [6, 9] : fmtNow === 'duo' ? [4, 6, 8, 10] : [2, 4, 6, 8, 10];
+    const validCaps = capChoices(hostDraft.mode, fmtNow);
     if (!validCaps.includes(hostDraft.cap)) hostDraft.cap = validCaps.find(n => n >= hostDraft.cap) || validCaps[validCaps.length - 1];
     byId('hostCapToggle').querySelectorAll('.theme-btn').forEach(el=>{ el.style.display = validCaps.includes(Number(el.dataset.cap)) ? '' : 'none'; });
     byId('hostMapGrid').querySelectorAll('.map-card').forEach(el=>el.classList.toggle('disabled', (sdOn && SD_BLOCKED_MAPS.includes(el.dataset.map)) || (hostDraft.mode === 'ctf' && CTF_BLOCKED_MAPS.includes(el.dataset.map))));
