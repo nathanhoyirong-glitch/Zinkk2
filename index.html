@@ -1484,7 +1484,7 @@
         const x = CX + Math.cos(th) * r, y = CY + Math.sin(th) * r;
         if (!(x > EDGE && x < SIZE - EDGE && y > EDGE && y < SIZE - EDGE)) ok = 0;   // cell must sit fully inside, clear of the border
       }
-      a[j] = k === 0 ? 1 : ok;
+      a[j] = (k === 0 || cfg.disc) ? 1 : ok;
     } return a; });
     const inLink = N.map(n => new Uint8Array(n)), ccwLink = N.map(n => new Uint8Array(n));
     const parentOf = (k, j) => Math.floor(j * N[k - 1] / N[k]);
@@ -1518,81 +1518,52 @@
       if (rng() < 0.04 && vis[k][(j + 1) % N[k]]) ccwLink[k][(j + 1) % N[k]] = 1;
       if (rng() < 0.04) inLink[k][j] = 1;
     }
-    // rasterise: a square is wall if it lies on a ring wall or a radial wall that hasn't been opened
-    const wall = []; for (let v = 0; v < S; v++) wall.push(new Uint8Array(S));
-    for (let v = 0; v < S; v++) for (let u = 0; u < S; u++){
-      if (u === 0 || v === 0 || u === S - 1 || v === S - 1){ wall[v][u] = 1; continue; }
-      const dx = (u + 0.5) * SQ - CX, dy = (v + 0.5) * SQ - CY, rho = Math.hypot(dx, dy);
-      if (cfg.disc && rho > RW * RINGS - HALF){ wall[v][u] = 1; continue; }   // round arena: solid outside the outer ring
-      let th = Math.atan2(dy, dx); if (th < 0) th += TAU;
-      const kb = Math.round(rho / RW);
-      if (kb >= 1 && kb < RINGS && Math.abs(rho - RW * kb) < HALF){
-        const j = Math.min(N[kb] - 1, Math.floor(th / TAU * N[kb]));
-        if (!inLink[kb][j]){ wall[v][u] = 1; continue; }
-      }
-      const k = Math.floor(rho / RW);
-      if (k >= 1 && k < RINGS && N[k] > 1){
-        const uu = th / TAU * N[k], jn = Math.round(uu);
-        if (rho * Math.abs(uu - jn) * TAU / N[k] < HALF && !ccwLink[k][jn % N[k]]) wall[v][u] = 1;
-      }
+    // Walls are built as TRUE curves (no pixel grid): ring walls are annular sectors, radial walls are rotated bars,
+    // and the outer rim is a perfect circle. rectCircleCollide() knows how to hit-test each kind.
+    const HW = HALF, R_IN = RW * RINGS - HALF;
+    const bb = (o, xs, ys) => { const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys); o.x = x0; o.y = y0; o.w = x1 - x0; o.h = y1 - y0; return o; };
+    const arc = (r, a0, span) => {
+      const r0 = r - HW, r1 = r + HW, xs = [], ys = [];
+      for (let i = 0; i <= 8; i++){ const t = a0 + span * i / 8; for (const rr of [r0, r1]){ xs.push(CX + Math.cos(t) * rr); ys.push(CY + Math.sin(t) * rr); } }
+      return bb({ k: 'a', cx: CX, cy: CY, r0, r1, a0, span }, xs, ys);
+    };
+    const bar = (th, rA, rB) => {   // radial wall from radius rA to rB at angle th
+      const ux = Math.cos(th), uy = Math.sin(th), rm = (rA + rB) / 2, hl = (rB - rA) / 2, mx = CX + ux * rm, my = CY + uy * rm;
+      const xs = [], ys = [];
+      for (const sa of [-1, 1]) for (const sb of [-1, 1]){ xs.push(mx + ux * hl * sa - uy * HW * sb); ys.push(my + uy * hl * sa + ux * HW * sb); }
+      return bb({ k: 'r', cx: mx, cy: my, ux, uy, hl, hw: HW }, xs, ys);
+    };
+    const curved = [];
+    for (let kb = 1; kb < RINGS; kb++) for (let j = 0; j < N[kb]; j++){
+      if (!inLink[kb][j]) curved.push(arc(RW * kb, j * TAU / N[kb], TAU / N[kb]));
     }
-    // 12 open spawn rooms (7 x 7 squares) ringed around the outside
-    const zones = [];
+    for (let k = 1; k < RINGS; k++) if (N[k] > 1) for (let j = 0; j < N[k]; j++){
+      if (!ccwLink[k][j]) curved.push(bar(j * TAU / N[k], RW * k, RW * (k + 1)));
+    }
+    // 12 open round spawn rooms ringed around the outside (any wall piece touching a room is removed)
+    const zones = [], ROOM = 76;
     for (let i = 0; i < 12; i++){
       const a = (15 + 30 * i) * Math.PI / 180;
-      const cu = Math.floor((CX + Math.cos(a) * cfg.roomR) / SQ), cv = Math.floor((CY + Math.sin(a) * cfg.roomR) / SQ);
-      for (let v = cv - 10; v <= cv + 10; v++) for (let u = cu - 10; u <= cu + 10; u++){
-        if (Math.hypot(u - cu, v - cv) * SQ <= 76 && u > 0 && v > 0 && u < S - 1 && v < S - 1) wall[v][u] = 0;   // round room
-      }
-      zones.push({ x: (cu + 0.5) * SQ, y: (cv + 0.5) * SQ });
+      zones.push({ x: CX + Math.cos(a) * cfg.roomR, y: CY + Math.sin(a) * cfg.roomR });
     }
-    // keep only space a tank can actually reach: flood-fill with the tank's radius from the first room, then wall off
-    // everything else (pockets, slivers and gaps too narrow to drive through), so nobody can ever get stuck or wedged
-    {
-      const offs = [], rE = TR + 1, rN = Math.ceil(rE / SQ);
-      for (let dv = -rN; dv <= rN; dv++) for (let du = -rN; du <= rN; du++) if (Math.hypot(du, dv) * SQ <= rE) offs.push([du, dv]);
-      const wide = new Uint8Array(S * S);
-      for (let v = 0; v < S; v++) for (let u = 0; u < S; u++){
-        if (wall[v][u]) continue;
-        let ok = 1;
-        for (const [du, dv] of offs){ const a = u + du, b = v + dv; if (a < 0 || b < 0 || a >= S || b >= S || wall[b][a]){ ok = 0; break; } }
-        wide[v * S + u] = ok;
-      }
-      const reach = new Uint8Array(S * S), q = [];
-      const seed = Math.floor(zones[0].y / SQ) * S + Math.floor(zones[0].x / SQ);
-      if (wide[seed]){ reach[seed] = 1; q.push(seed); }
-      for (let qi = 0; qi < q.length; qi++){
-        const c = q[qi], cu = c % S, cv = (c - cu) / S;
-        for (let dv = -1; dv <= 1; dv++) for (let du = -1; du <= 1; du++){
-          const a = cu + du, b = cv + dv; if (a < 0 || b < 0 || a >= S || b >= S) continue;
-          const id = b * S + a; if (wide[id] && !reach[id]){ reach[id] = 1; q.push(id); }
+    const touchesRoom = o => {
+      for (const z of zones){
+        for (let i = 0; i <= 24; i++){
+          let px, py;
+          if (o.k === 'a'){ const t = o.a0 + o.span * i / 24, rm = (o.r0 + o.r1) / 2; px = CX + Math.cos(t) * rm; py = CY + Math.sin(t) * rm; }
+          else { const f = (i / 12 - 1) * o.hl; px = o.cx + o.ux * f; py = o.cy + o.uy * f; }
+          if (Math.hypot(px - z.x, py - z.y) < ROOM + HW + 2) return true;
         }
       }
-      const keep = new Uint8Array(S * S), rD = Math.ceil((TR + SQ) / SQ);
-      for (const c of q){
-        const cu = c % S, cv = (c - cu) / S;
-        for (let dv = -rD; dv <= rD; dv++) for (let du = -rD; du <= rD; du++){
-          const a = cu + du, b = cv + dv; if (a < 0 || b < 0 || a >= S || b >= S) continue;
-          if (Math.hypot(du, dv) * SQ <= TR + SQ) keep[b * S + a] = 1;
-        }
-      }
-      for (let v = 0; v < S; v++) for (let u = 0; u < S; u++) if (!wall[v][u] && !keep[v * S + u]) wall[v][u] = 1;
-      var unreachableRooms = zones.filter(z => !reach[Math.floor(z.y / SQ) * S + Math.floor(z.x / SQ)]).length;
-    }
-    // merge wall squares into as few rectangles as possible
-    const obstacles = [], active = {};
-    for (let v = 0; v <= S; v++){
-      const runs = [];
-      if (v < S){ let u = 0; while (u < S){ if (!wall[v][u]){ u++; continue; } let e = u; while (e < S && wall[v][e]) e++; runs.push([u, e - u]); u = e; } }
-      const keys = new Set(runs.map(r => r[0] + '_' + r[1]));
-      for (const key of Object.keys(active)){ if (!keys.has(key)){ obstacles.push(active[key]); delete active[key]; } }
-      for (const [u, len] of runs){ const key = u + '_' + len; if (active[key]) active[key].h += SQ; else active[key] = { x: u * SQ, y: v * SQ, w: len * SQ, h: SQ }; }
-    }
-    return { obstacles, zones, size: SIZE, flagBases: { red: zones[0], blue: zones[6] }, fine: true, unreachableRooms };
+      return false;
+    };
+    const obstacles = curved.filter(o => !touchesRoom(o));
+    obstacles.push({ k: 'o', cx: CX, cy: CY, R: R_IN, x: 0, y: 0, w: SIZE, h: SIZE });   // solid outside a perfect circle
+    return { obstacles, zones, size: SIZE, flagBases: { red: zones[0], blue: zones[6] }, fine: true, curved: true, rim: R_IN, wallHalf: HW };
   }
 
   const LOST_ENDS = buildMaze(0x10575E7D, 0.05);
-  const INSANITY = buildCircleMaze({ seed: 0x1A5A17, RW: 105, RINGS: 21, roomR: 1350, disc: false });
+  const INSANITY = buildCircleMaze({ seed: 0x1A5A17, RW: 83, RINGS: 18, roomR: 1330, disc: true });
   // CIRCLE MAZE: a round arena -- one big disc-shaped maze with an open room in the middle, solid outside the outer ring
   const CIRCLE = buildCircleMaze({ seed: 0xC12C1E, RW: 100, RINGS: 15, roomR: 1220, disc: true });
   const MAPS = {
@@ -1629,8 +1600,8 @@
       {x:510,y:0,w:30,h:390},{x:510,y:1110,w:30,h:390},{x:660,y:0,w:30,h:390},{x:660,y:1110,w:30,h:390},{x:810,y:0,w:30,h:390},{x:810,y:1110,w:30,h:390},{x:960,y:0,w:30,h:390},{x:960,y:1110,w:30,h:390},{x:0,y:510,w:390,h:30},{x:1110,y:510,w:390,h:30},{x:0,y:660,w:390,h:30},{x:1110,y:660,w:390,h:30},{x:0,y:810,w:390,h:30},{x:1110,y:810,w:390,h:30},{x:0,y:960,w:390,h:30},{x:1110,y:960,w:390,h:30},{x:240,y:0,w:30,h:210},{x:1230,y:0,w:30,h:210},{x:240,y:1290,w:30,h:210},{x:1230,y:1290,w:30,h:210},{x:570,y:570,w:120,h:30},{x:810,y:570,w:120,h:30},{x:570,y:900,w:120,h:30},{x:810,y:900,w:120,h:30},{x:570,y:570,w:30,h:120},{x:570,y:810,w:30,h:120},{x:900,y:570,w:30,h:120},{x:900,y:810,w:30,h:120},{x:720,y:720,w:60,h:60},{x:330,y:330,w:60,h:60},{x:1110,y:330,w:60,h:60},{x:330,y:1110,w:60,h:60},{x:1110,y:1110,w:60,h:60}
     ] },
     lostends: { name:'LOST ENDS', desc:'Gigantic 100x100 maze. Spawn at the sides; teams start together', obstacles: LOST_ENDS.obstacles, size: LOST_ENDS.size, zones: LOST_ENDS.zones, tight: true },
-    insanity: { name:'INSANITY', desc:'Circular 100x100 maze: ring after ring of winding corridors. Spawn rooms around the outside', obstacles: INSANITY.obstacles, size: INSANITY.size, zones: INSANITY.zones, fine: true, tight: true, flagBases: INSANITY.flagBases },
-    circle: { name:'CIRCLE MAZE', desc:'Round 3000px disc maze, open room in the middle. Spawn rooms ring the outside', obstacles: CIRCLE.obstacles, size: CIRCLE.size, zones: CIRCLE.zones, fine: true, tight: true, flagBases: CIRCLE.flagBases },
+    insanity: { name:'INSANITY', desc:'Perfectly round maze: ring after ring of winding corridors. Spawn rooms around the outside', obstacles: INSANITY.obstacles, size: INSANITY.size, zones: INSANITY.zones, curved: true, rim: INSANITY.rim, wallHalf: INSANITY.wallHalf, tight: true, flagBases: INSANITY.flagBases },
+    circle: { name:'CIRCLE MAZE', desc:'Round 3000px disc maze, open room in the middle. Spawn rooms ring the outside', obstacles: CIRCLE.obstacles, size: CIRCLE.size, zones: CIRCLE.zones, curved: true, rim: CIRCLE.rim, wallHalf: CIRCLE.wallHalf, tight: true, flagBases: CIRCLE.flagBases },
     tetris: { name:'TETRIS', desc:'Blocks rain down and vanish on landing. Shoot them or get hit.', obstacles:[],
       colored:[[0,1350,300,75,'#22d3ee'],[300,1425,150,75,'#facc15'],[450,1350,225,75,'#a855f7'],[675,1425,225,75,'#22c55e'],
                [900,1350,225,75,'#3b82f6'],[1125,1425,225,75,'#f97316'],[1350,1350,150,150,'#ef4444'],
@@ -3335,7 +3306,27 @@
     ctx.restore();
   }
 
+  function curvedHit(px, py, r, o){
+    if (o.k === 'o') return Math.hypot(px - o.cx, py - o.cy) + r > o.R;          // outside the round rim
+    if (px < o.x - r || px > o.x + o.w + r || py < o.y - r || py > o.y + o.h + r) return false;
+    if (o.k === 'r'){                                                           // rotated bar (radial wall)
+      const dx = px - o.cx, dy = py - o.cy;
+      const lx = Math.max(-o.hl, Math.min(o.hl, dx * o.ux + dy * o.uy)), ly = Math.max(-o.hw, Math.min(o.hw, -dx * o.uy + dy * o.ux));
+      const ex = dx * o.ux + dy * o.uy - lx, ey = -dx * o.uy + dy * o.ux - ly;
+      return ex * ex + ey * ey < r * r;
+    }
+    const dx = px - o.cx, dy = py - o.cy, d = Math.hypot(dx, dy);                // annular sector (ring wall)
+    let rel = Math.atan2(dy, dx) - o.a0; rel = ((rel % 6.283185307179586) + 6.283185307179586) % 6.283185307179586;
+    if (rel <= o.span) return d + r > o.r0 && d - r < o.r1;
+    for (const t of [o.a0, o.a0 + o.span]){                                     // beyond either end: distance to the end edge
+      const ux = Math.cos(t), uy = Math.sin(t), along = Math.max(o.r0, Math.min(o.r1, dx * ux + dy * uy));
+      const ex = dx - ux * along, ey = dy - uy * along;
+      if (ex * ex + ey * ey < r * r) return true;
+    }
+    return false;
+  }
   function rectCircleCollide(cx, cy, r, rect){
+    if (rect.k) return curvedHit(cx, cy, r, rect);
     const nx = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
     const ny = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
     const dx = cx - nx, dy = cy - ny;
@@ -4636,6 +4627,26 @@
       hazardStroke: 'rgba(8,169,247,0.75)',
     };
   }
+  // draws arc / bar / round-rim walls with real curves: outline pass first, fill pass on top
+  function drawCurvedWalls(c, obs, k, fill, stroke, size, rim, hw){
+    const TAU2 = Math.PI * 2, cx = size / 2 * k, cy = size / 2 * k;
+    c.save(); c.lineCap = 'butt';
+    const pass = (col, extra) => {
+      c.strokeStyle = col; c.lineWidth = Math.max(1, 2 * hw * k + extra);
+      c.beginPath();
+      for (const o of obs){
+        if (o.k === 'a'){ const rm = (o.r0 + o.r1) / 2 * k; c.moveTo(cx + Math.cos(o.a0) * rm, cy + Math.sin(o.a0) * rm); c.arc(cx, cy, rm, o.a0, o.a0 + o.span); }
+        else if (o.k === 'r'){ c.moveTo((o.cx - o.ux * o.hl) * k, (o.cy - o.uy * o.hl) * k); c.lineTo((o.cx + o.ux * o.hl) * k, (o.cy + o.uy * o.hl) * k); }
+      }
+      c.stroke();
+    };
+    if (stroke) pass(stroke, 3 * k);
+    // solid area outside the round rim
+    c.fillStyle = fill; c.beginPath(); c.rect(0, 0, size * k, size * k); c.arc(cx, cy, rim * k, 0, TAU2, true); c.fill('evenodd');
+    if (stroke){ c.strokeStyle = stroke; c.lineWidth = 3 * k + 1; c.beginPath(); c.arc(cx, cy, rim * k, 0, TAU2); c.stroke(); }
+    pass(fill, 0);
+    c.restore();
+  }
   function invalidateBackground(){ bgCanvas = null; }
 
   function buildBackground(){
@@ -4670,12 +4681,8 @@
     // obstacles
     bctx.fillStyle = pal.obstacleFill;
     bctx.strokeStyle = pal.obstacleStroke;
-    if (MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].fine){
-      // fine-grid curved mazes: stroke every piece first, then fill on top, so only the outer outline of the walls remains
-      bctx.lineJoin = 'round'; bctx.lineWidth = 3;
-      OBSTACLES.forEach(o=>bctx.strokeRect(o.x,o.y,o.w,o.h));
-      OBSTACLES.forEach(o=>bctx.fillRect(o.x-0.3,o.y-0.3,o.w+0.6,o.h+0.6));
-      bctx.lineWidth = 1;
+    if (MAPS[ACTIVE_MAP] && MAPS[ACTIVE_MAP].curved){
+      drawCurvedWalls(bctx, OBSTACLES, 1, pal.obstacleFill, pal.obstacleStroke, MAPS[ACTIVE_MAP].size, MAPS[ACTIVE_MAP].rim, MAPS[ACTIVE_MAP].wallHalf);
     } else OBSTACLES.forEach(o=>{
       bctx.fillRect(o.x,o.y,o.w,o.h);
       bctx.strokeRect(o.x+0.5,o.y+0.5,o.w-1,o.h-1);
@@ -5424,7 +5431,8 @@
       MAPS[id].hazards.forEach(z=>c.fillRect(z.x*k, z.y*k, Math.max(2,z.w*k), Math.max(2,z.h*k)));
     }
     c.fillStyle = state.settings.theme === 'light' ? '#8f8f8f' : 'rgba(170,170,170,0.6)';
-    MAPS[id].obstacles.forEach(o=>c.fillRect(o.x*k, o.y*k, Math.max(2,o.w*k), Math.max(2,o.h*k)));
+    if (MAPS[id].curved) drawCurvedWalls(c, MAPS[id].obstacles, k, c.fillStyle, null, MAPS[id].size, MAPS[id].rim, MAPS[id].wallHalf);
+    else MAPS[id].obstacles.forEach(o=>c.fillRect(o.x*k, o.y*k, Math.max(2,o.w*k), Math.max(2,o.h*k)));
     if (MAPS[id].colored) MAPS[id].colored.forEach(b=>{ c.fillStyle = b[4]; c.fillRect(b[0]*k, b[1]*k, Math.max(2,b[2]*k), Math.max(2,b[3]*k)); });
   }
   function refreshHostUI(){
