@@ -1972,6 +1972,16 @@ function indexHtml() {
     {id:'periwinkle', hex:'#7d6fe0'},
     {id:'orchid', hex:'#d76fe0'},
     {id:'rose',   hex:'#e06f8c'},
+    {id:'crimson', hex:'#d6304a'},
+    {id:'orange',  hex:'#f08a3c'},
+    {id:'gold',    hex:'#e8c23a'},
+    {id:'olive',   hex:'#a3b04a'},
+    {id:'emerald', hex:'#35c27a'},
+    {id:'sky',     hex:'#6fc3f0'},
+    {id:'navy',    hex:'#4a63c9'},
+    {id:'violet',  hex:'#b05fe8'},
+    {id:'magenta', hex:'#e04fc0'},
+    {id:'silver',  hex:'#b9c2cc'},
   ];
 
   // max players per sector (Room 1 stays a 4 player duel arena, Room 2 hosts up to 10)

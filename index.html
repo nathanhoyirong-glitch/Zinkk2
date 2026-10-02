@@ -685,7 +685,7 @@
     <div class="settings-row" id="hostSdRow" style="display:none;">
       <div class="settings-label"><span>SHOWDOWN FORMAT</span><span id="hostSdName"></span></div>
       <div class="theme-toggle" id="hostSdToggle"></div>
-      <div class="mode-desc">Needs an even number of players to start. Not available on the Tetris maps.</div>
+      <div class="mode-desc">Solo can start with any number of players (2+). Not available on the Tetris maps.</div>
     </div>
     <div class="settings-row">
       <div class="settings-label"><span>MAX PLAYERS</span></div>
@@ -1368,6 +1368,16 @@
     {id:'periwinkle', hex:'#7d6fe0'},
     {id:'orchid', hex:'#d76fe0'},
     {id:'rose',   hex:'#e06f8c'},
+    {id:'crimson', hex:'#d6304a'},
+    {id:'orange',  hex:'#f08a3c'},
+    {id:'gold',    hex:'#e8c23a'},
+    {id:'olive',   hex:'#a3b04a'},
+    {id:'emerald', hex:'#35c27a'},
+    {id:'sky',     hex:'#6fc3f0'},
+    {id:'navy',    hex:'#4a63c9'},
+    {id:'violet',  hex:'#b05fe8'},
+    {id:'magenta', hex:'#e04fc0'},
+    {id:'silver',  hex:'#b9c2cc'},
   ];
 
   // max players per sector (Room 1 stays a 4 player duel arena, Room 2 hosts up to 10)
@@ -1518,6 +1528,7 @@
     if (mode === 'ffa' || mode === 'teams') return [2,4,6,8,10,12,14,16,18,20];
     if (mode === 'showdown' && fmt === 'trio') return [3,6,9];
     if (mode === 'showdown' && fmt === 'duo') return [4,6,8,10];
+    if (mode === 'showdown') return [2,3,4,6,8,9,10];   // solo: odd head-counts are fine
     return [2,4,6,8,10];
   }
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -4105,8 +4116,7 @@
   // is the lobby head-count OK to start? returns '' or a message. Duo / trio never block: bots fill the gap (sdBotsNeeded).
   function sdCountProblem(n, meta){
     const size = sdSizeOfMeta(meta);
-    if (!size) return n % 2 !== 0 ? 'Showdown needs an EVEN number of players (' + n + ' joined) \u2014 wait for one more.' : '';
-    return '';
+    return '';   // solo, duo and trio never block on head-count (duo / trio get bots)
   }
   // Duo = pairs, trio = threes, and there must always be at least 2 teams (duo 4, trio 6). Bots top up whatever is missing.
   function sdBotsNeeded(n, meta){
@@ -4897,8 +4907,10 @@
     if (teams === 'trio') capOk = (capOk === 3 || capOk === 6 || capOk === 9) ? capOk : 6;
     else if (teams === 'duo') capOk = (capOk >= 4 && capOk <= 10 && capOk % 2 === 0) ? capOk : 4;
     else {
-      if (capOk === 9) capOk = 8;
-      if (capOk === 3) capOk = 4;
+      if (mode !== 'showdown'){
+        if (capOk === 9) capOk = 8;
+        if (capOk === 3) capOk = 4;
+      }
       if (mode !== 'ffa' && mode !== 'teams') capOk = Math.min(capOk, 10);   // only FFA / 2 TEAMS go up to 20
     }
     return {
