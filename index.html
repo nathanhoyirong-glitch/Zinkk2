@@ -386,6 +386,17 @@
   .cmdbar.show { display:block; }
   .cmdbar input { background:rgba(var(--panel-rgb),0.92); }
 
+  /* ---------- minimap (toggle: map button or M, drag to move) ---------- */
+  .hud-leave-btn.active { border-color:var(--green); background:rgba(var(--panel-rgb),0.95); }
+  .minimap {
+    position:absolute; top:64px; left:0; z-index:8; display:none; padding:3px;
+    background:rgba(var(--panel-rgb),0.6); border:1px solid var(--line-bright); border-radius:var(--radius);
+    opacity:0.5; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; pointer-events:auto;
+  }
+  .minimap.show { display:block; }
+  .minimap.dragging { cursor:grabbing; }
+  .minimap canvas { display:block; pointer-events:none; }
+
   /* ---------- in-game chat ---------- */
   .chat-dot { position:absolute; top:2px; right:2px; width:8px; height:8px; border-radius:50%; background:var(--amber); border:1px solid rgba(var(--panel-rgb),0.9); display:none; }
   .hud-leave-btn.has-unread .chat-dot { display:block; }
@@ -568,6 +579,7 @@
           <button class="hud-leave-btn" id="gameSettingsBtn" aria-label="Settings">&#9881;</button>
           <button class="hud-leave-btn" id="cmdBtn" aria-label="Commands">/</button>
           <button class="hud-leave-btn" id="chatBtn" aria-label="Chat">&#128172;<span class="chat-dot"></span></button>
+          <button class="hud-leave-btn" id="mapBtn" aria-label="Minimap (M)" title="Minimap (M)">&#128506;</button>
           <b id="hudRoomName">SECTOR</b><span id="hudSelfHealth">HP 100</span>
           <span class="match-timer" id="matchTimer"></span>
           <span class="match-timer" id="droneCount"></span>
@@ -585,6 +597,8 @@
           <button type="button" class="chat-send-btn" id="chatSendBtn">SEND</button>
         </div>
       </div>
+
+      <div class="minimap" id="minimap" aria-label="Minimap"><canvas id="mmCanvas"></canvas></div>
 
       <div class="killfeed" id="killfeed"></div>
       <div class="sd-spec" id="sdSpec"><span id="sdSpecText"></span><button type="button" id="sdSpecNext">NEXT</button></div>
@@ -3050,6 +3064,7 @@
     if (e.target && e.target.tagName === 'INPUT') return;   // typing in the command bar
     if (e.key === '/' || e.key === 'Enter'){ e.preventDefault(); openCmd(e.key === '/' ? '/' : ''); return; }
     if (e.code === 'KeyT'){ e.preventDefault(); openChat(); return; }
+    if (e.code === 'KeyM'){ e.preventDefault(); if (!e.repeat) mmToggle(); return; }
     const digitIdx = STAT_KEY_CODES.indexOf(e.code);
     if (digitIdx !== -1){
       if (!e.repeat) allocateStat(STATS[digitIdx].id);
@@ -5007,7 +5022,141 @@
 
     ctx.restore();
     if (state.sd) sdDrawTint();
+    if (MM.open) mmDraw();
   }
+
+  // ---------------------------------------------------------------
+  // MINIMAP -- tiny, draggable, 50% transparent overview of the whole arena.
+  // Toggle with the map button in the HUD or the M key. Walls are painted once
+  // into a cached canvas (rebuilt when the map / theme changes); players, bots
+  // and falling Tetris blocks are redrawn on top ~25x a second.
+  // ---------------------------------------------------------------
+  const MM = { open:false, placed:false, size:0, dpr:1, stat:null, statBg:null, statMap:null, last:0 };
+  function mmEls(){ return { box: byId('minimap'), cv: byId('mmCanvas') }; }
+  function mmLayout(){
+    const { cv } = mmEls();
+    const size = window.innerWidth < 600 ? 96 : 120, dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (MM.size === size && MM.dpr === dpr) return;
+    MM.size = size; MM.dpr = dpr;
+    cv.width = cv.height = Math.round(size * dpr);
+    cv.style.width = cv.style.height = size + 'px';
+    MM.stat = null;
+  }
+  function mmClampPos(x, y){
+    const { box } = mmEls(), par = box.offsetParent || document.body;
+    return { x: clamp(x, 0, Math.max(0, par.clientWidth - box.offsetWidth)), y: clamp(y, 0, Math.max(0, par.clientHeight - box.offsetHeight)) };
+  }
+  function mmMoveTo(x, y){
+    const { box } = mmEls(), p = mmClampPos(x, y);
+    box.style.left = p.x + 'px'; box.style.top = p.y + 'px';
+  }
+  function mmToggle(force){
+    const { box } = mmEls();
+    MM.open = force === undefined ? !MM.open : !!force;
+    box.classList.toggle('show', MM.open);
+    byId('mapBtn').classList.toggle('active', MM.open);
+    if (!MM.open) return;
+    mmLayout();
+    const par = box.offsetParent || document.body;
+    if (!MM.placed){ MM.placed = true; mmMoveTo(par.clientWidth - box.offsetWidth - 10, 64); }   // default: top-right, under the HUD
+    else mmMoveTo(parseFloat(box.style.left) || 0, parseFloat(box.style.top) || 0);
+    MM.last = 0;
+    mmDraw();
+  }
+  function mmBuildStatic(){
+    const { cv } = mmEls(), W = cv.width, k = W / ARENA_W, light = state.settings.theme === 'light';
+    const pal = canvasPalette(), M = MAPS[ACTIVE_MAP] || {};
+    const st = document.createElement('canvas'); st.width = st.height = W;
+    const c = st.getContext('2d');
+    c.fillStyle = pal.bg; c.fillRect(0, 0, W, W);
+    if (HAZARDS.length){
+      c.fillStyle = pal.hazardFill;
+      HAZARDS.forEach(z => c.fillRect(z.x * k, z.y * k, Math.max(1, z.w * k), Math.max(1, z.h * k)));
+    }
+    const wall = light ? '#4a4a4a' : '#c4c4c4';
+    c.fillStyle = wall;
+    if (M.curved) drawCurvedWalls(c, OBSTACLES, k, wall, null, M.size, M.rim, M.wallHalf);
+    else OBSTACLES.forEach(o => c.fillRect(o.x * k, o.y * k, Math.max(1, o.w * k), Math.max(1, o.h * k)));
+    if (M.colored) M.colored.forEach(b => { c.fillStyle = b[4]; c.fillRect(b[0] * k, b[1] * k, Math.max(1, b[2] * k), Math.max(1, b[3] * k)); });
+    c.strokeStyle = pal.border; c.lineWidth = 1; c.strokeRect(0.5, 0.5, W - 1, W - 1);
+    MM.stat = st; MM.statBg = bgCanvas; MM.statMap = ACTIVE_MAP;
+  }
+  function mmDraw(){
+    const now = performance.now();
+    if (now - MM.last < 40) return;
+    MM.last = now;
+    mmLayout();
+    if (!MM.stat || MM.statBg !== bgCanvas || MM.statMap !== ACTIVE_MAP) mmBuildStatic();
+    const { cv } = mmEls(), g = cv.getContext('2d'), W = cv.width, k = W / ARENA_W, d = MM.dpr;
+    g.clearRect(0, 0, W, W);
+    g.drawImage(MM.stat, 0, 0);
+
+    // falling / landed Tetris blocks (they move, so they can't live in the cached layer)
+    if (ACTIVE_MAP === 'tetris' && TETRIS){
+      const cs = TT.CELL;
+      TETRIS.pieces.forEach(p => {
+        if (p.dead) return;
+        const fade = p.landed ? Math.max(0, 1 - (p.age - TT.ROWS) * TT.TICK_MS / TT.LAND_MS) : 1;
+        if (fade <= 0) return;
+        g.globalAlpha = fade * (p.landed ? 1 : 0.8);
+        g.fillStyle = TT_COLORS[TT_TYPES[p.type]];
+        p.cells.forEach(c2 => g.fillRect((p.col + c2[0]) * cs * k, (p.top + c2[1]) * cs * k, Math.max(1, cs * k), Math.max(1, cs * k)));
+      });
+      g.globalAlpha = 1;
+    }
+
+    g.lineWidth = Math.max(1, d * 0.8);
+    g.strokeStyle = 'rgba(0,0,0,0.7)';
+    // other players (circles) and showdown bots (squares)
+    peersIn(state.currentSector).forEach(p => {
+      if (p.isMe || !p.presence || p.presence.alive === false || p.presence.x === undefined) return;
+      const ally = state.team && p.presence.team === state.team;
+      if (!p.isBot){   // invisible Predators stay hidden on the map too (allies still see them)
+        const lo = resolveLoadout(p.presence.score||0, p.presence.loadout7, p.presence.loadout14, p.presence.loadout20, p.presence.adminTank, p.presence.loadout1);
+        if (lo === 'predator' && p.presence.hidden && !ally) return;
+      }
+      const sm = state.remoteSmooth[p.peer], x = (sm ? sm.x : p.presence.x) * k, y = (sm ? sm.y : p.presence.y) * k;
+      g.fillStyle = colorHex(p.presence.color);
+      if (p.isBot){
+        const h = 2.4 * d;
+        g.fillRect(x - h, y - h, h * 2, h * 2); g.strokeRect(x - h, y - h, h * 2, h * 2);
+      } else {
+        g.beginPath(); g.arc(x, y, 2.6 * d, 0, Math.PI * 2); g.fill(); g.stroke();
+      }
+    });
+
+    // me: bigger, white ring, with a tick showing where the turret points
+    if (state.alive){
+      const x = state.x * k, y = state.y * k, a = state.turretAngle || 0;
+      g.strokeStyle = '#ffffff'; g.lineWidth = Math.max(1, d);
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * 7 * d, y + Math.sin(a) * 7 * d); g.stroke();
+      g.fillStyle = state.color.hex;
+      g.beginPath(); g.arc(x, y, 3.6 * d, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
+  }
+  (function initMinimap(){
+    const box = byId('minimap');
+    let drag = null;
+    box.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, bx: parseFloat(box.style.left) || 0, by: parseFloat(box.style.top) || 0 };
+      box.classList.add('dragging');
+      try { box.setPointerCapture(e.pointerId); } catch(err){}
+    });
+    box.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      mmMoveTo(drag.bx + e.clientX - drag.sx, drag.by + e.clientY - drag.sy);
+    });
+    const end = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag = null; box.classList.remove('dragging');
+      try { box.releasePointerCapture(e.pointerId); } catch(err){}
+    };
+    box.addEventListener('pointerup', end);
+    box.addEventListener('pointercancel', end);
+    window.addEventListener('resize', () => { if (MM.open){ mmLayout(); mmMoveTo(parseFloat(box.style.left) || 0, parseFloat(box.style.top) || 0); } });
+    byId('mapBtn').addEventListener('click', () => mmToggle());
+  })();
 
   function drawFlag(x,y,color,atBase){
     ctx.save();
