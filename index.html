@@ -1637,7 +1637,7 @@
     currentSector: null, // 'A' | 'B' | null
     waitingToStart: false, // true while sitting in a hosted room's pre-start lobby
     roomMode: null,       // 'ffa' | 'teams' | 'ctf' (only meaningful while currentSector is set)
-    sd: null, sdOut: false, sdTeams: false, sdTeamSize: 0, unsubSd: null,   // Showdown runtime
+    sd: null, lc: null, sdOut: false, sdTeams: false, sdTeamSize: 0, unsubSd: null,   // Showdown runtime
     bots: [], botSyncAt: 0,   // Showdown bots simulated by the room host (see BOT section)
     team: null,           // 'red' | 'blue' | null -- assigned on join in team modes, forced FFA otherwise
     carrying: null,       // 'red' | 'blue' | null -- which flag I'm currently carrying (CTF)
@@ -2415,6 +2415,7 @@
     if (state.roomMode === 'showdown') sdInit();
     else {
       state.sd = null;
+      lcInit();   // LOST ENDS: chests in every game mode
       let sp = pickSpawnPoint();         // a different part of the map each time
       if (state.roomMode === 'teams' && state.team && mapHasZones()){
         const mates = peersIn(state.currentSector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0)).filter(p => (p.isMe ? state.team : p.presence.team) === state.team);
@@ -3282,6 +3283,7 @@
   function update(dt){
     if (ACTIVE_MAP === 'tetris') ttUpdate();
     if (state.sd) sdUpdate(dt);
+    else if (state.lc) lcUpdate();
     if (state.bots.length) botsUpdate(dt);
     updateRemoteSmoothing(dt);
     updateRemoteDrones(dt);
@@ -3371,7 +3373,7 @@
           if (rectCircleCollide(b.x,b.y,b.r||BULLET_R,o)){ spawnSpark(b.x,b.y,b.color); return fwPop(b); }
         }
         if (ACTIVE_MAP === 'tetris' && ttBulletHit(b)) return fwPop(b);
-        if (state.sd && !state.sd.over){
+        if (cw() && !cw().over){
           const chest = sdChestAt(b.x, b.y, b.r || BULLET_R);
           if (chest){ spawnSpark(b.x, b.y, '#f5c542'); sdChestShot(chest, b); return fwPop(b); }
         }
@@ -3768,8 +3770,20 @@
   }
 
   // ---- chests ----
+  // chest world: Showdown's state.sd, or (LOST ENDS in any other mode) state.lc -- same chests, same events
+  function cw(){ return state.sd || state.lc; }
+  function lcInit(){
+    state.lc = null;
+    if (ACTIVE_MAP !== 'lostends') return;
+    const sector = state.currentSector;
+    state.lc = { chests: sdBuildChests(sector, capOf(sector)), pickups: [], over: false };
+  }
+  // the room host settles cracked chests (one-time: they don't come back)
+  function lcUpdate(){
+    if (state.lc) sdHostResolve();
+  }
   function sdChestAt(x, y, r){
-    for (const c of state.sd.chests){
+    for (const c of cw().chests){
       if (c.opened) continue;
       if (Math.hypot(x - c.x, y - c.y) < SD.CHEST_R + r) return c;
     }
@@ -3784,8 +3798,8 @@
     sdApplyChestDamage(ch.id, dmg, state.myPeerId, state.name);
   }
   function sdApplyChestDamage(chestId, dmg, shooterId, shooterName){
-    if (!state.sd) return;
-    const ch = state.sd.chests.find(c => c.id === chestId);
+    if (!cw()) return;
+    const ch = cw().chests.find(c => c.id === chestId);
     if (!ch || ch.opened) return;
     ch.hp -= (Number(dmg) || DAMAGE);
     ch.hitAt = performance.now();
@@ -3795,13 +3809,13 @@
   // The room host decides the reward so every client agrees on it. If the host
   // leaves mid-match, whoever becomes host next picks up any unresolved chest.
   function sdHostResolve(){
-    const sd = state.sd;
+    const sd = cw();
     if (!sd || sd.over || !isRoomHost(state.currentSector)) return;
     sd.chests.forEach(c => {
       if (c.opened || c.resolving) return;
       if (c.hp > 0){
-        // smoke has swallowed this crate -> it breaks open and drops a health pickup
-        if (!sdInSmoke(c.x, c.y)) return;
+        // smoke has swallowed this crate -> it breaks open and drops a health pickup (Showdown only)
+        if (!state.sd || !sdInSmoke(c.x, c.y)) return;
         c.resolving = true;
         const d = { roomId: state.currentSector, chestId: c.id, smoke: true, reward: 0 };
         state.room.emit('chestOpen', d);
@@ -3819,8 +3833,8 @@
     });
   }
   function sdOnChestOpen(d){
-    if (!state.sd) return;
-    const ch = state.sd.chests.find(c => c.id === d.chestId);
+    if (!cw()) return;
+    const ch = cw().chests.find(c => c.id === d.chestId);
     if (!ch || ch.opened) return;
     ch.opened = true; ch.hp = 0;
     if (d.smoke){
@@ -4226,7 +4240,7 @@
   }
   function sdDrawChests(){
     const t = performance.now();
-    state.sd.chests.forEach(ch => {
+    cw().chests.forEach(ch => {
       if (ch.opened) return;
       const since = t - ch.hitAt, hitFlash = since < 140;
       const shake = hitFlash ? (Math.random() - 0.5) * 5 : 0;
@@ -4534,6 +4548,7 @@
     ctx.drawImage(bgCanvas, 0, 0);
     if (ACTIVE_MAP === 'tetris') ttDraw(ctx);
     if (state.sd){ sdDrawChests(); sdDrawSmoke(camX, camY); sdDrawPickups(); }
+    else if (state.lc) sdDrawChests();
 
     // other tanks
     peersIn(state.currentSector).forEach(p=>{
@@ -4594,6 +4609,7 @@
 
     // sparks
     const now = performance.now();
+    state.sparks = state.sparks.filter(s => now - s.born < 350);   // effects always expire, even if update() didn't run this frame
     state.sparks.forEach(s=>{
       const t = (now - s.born)/350;
       const r = (s.big? 26:10) * (1-t) + 2;
@@ -4702,7 +4718,7 @@
     state.remoteDrones = {}; state.consumedDrones = {};
     state.currentSector = null;
     state.roomMode = null; state.team = null; state.carrying = null; state.captures = 0;
-    state.sd = null; state.sdOut = false; state.sdTeams = false; state.sdTeamSize = 0;
+    state.sd = null; state.lc = null; state.sdOut = false; state.sdTeams = false; state.sdTeamSize = 0;
     byId('sdSpec').classList.remove('show'); byId('sdPoison').textContent = ''; byId('sdPoison').classList.remove('low');
     byId('resultBackdrop').classList.remove('show');
     state.bullets = []; state.sparks = []; state.killfeed = [];
