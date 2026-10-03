@@ -47,7 +47,7 @@ const peers = new Map();
 // Hosted rooms live entirely in player presence (roomId 'H-XXXXX' plus a
 // roomMeta {name,map,cap}). Clamp whatever clients send so a bad client
 // can't push odd room ids or oversized values to everyone else.
-const ROOM_ID_RE = /^(A|B|H-[A-Z0-9]{5})$/;
+const ROOM_ID_RE = /^(A|B|C|H-[A-Z0-9]{5})$/;   // C = Room 3, the private bot-only training range
 const KNOWN_MAPS = new Set(['crossfire', 'flats', 'fortress', 'bunkers', 'grid', 'cross', 'tetris', 'maze', 'deadends', 'lostends', 'insanity', 'circle']);
 // Hosted-room game modes. 'ffa' (default) is every-tank-for-itself, exactly
 // like Room 1 / Room 2. 'teams' splits players into two sides (no friendly

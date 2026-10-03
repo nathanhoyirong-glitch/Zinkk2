@@ -358,6 +358,11 @@
   .btn-host { background:var(--green); color:var(--on-accent); border:none; padding:9px 14px; font-size:12px; letter-spacing:0.08em; font-weight:700; }
   .btn-host:disabled { background:var(--line-bright); color:var(--ink-dim); cursor:not-allowed; }
   .btn-host:not(:disabled):hover { filter:brightness(1.08); }
+  .train-bar { position:absolute; top:84px; left:50%; transform:translateX(-50%); z-index:6; display:none; align-items:center; gap:6px; flex-wrap:wrap; justify-content:center; max-width:96%; pointer-events:auto; }
+  .train-bar.show { display:flex; }
+  .train-bar button, .train-bar .tr-count { height:28px; padding:0 10px; background:rgba(var(--panel-rgb),0.85); border:1px solid var(--line-bright); color:var(--green); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:0.06em; display:flex; align-items:center; justify-content:center; }
+  .train-bar button:hover { border-color:var(--green); }
+  .train-bar .tr-count { color:var(--ink-dim); min-width:70px; }
   .hosted-head { width:100%; display:flex; align-items:baseline; gap:12px; margin:30px 0 12px; }
   .hosted-head h3 { font-size:22px; color:var(--ink); }
   .hosted-sub { font-size:11px; color:var(--ink-dim); letter-spacing:0.06em; }
@@ -553,6 +558,13 @@
         <div class="slots" id="roomSlots-B"></div>
         <div class="join-btn"><button id="joinBtn-B">DEPLOY TO ROOM 2</button></div>
       </div>
+      <div class="room-card bracket" id="roomCard-C" style="grid-column:1/-1;">
+        <span class="bl"></span><span class="br"></span>
+        <h2>ROOM 3</h2>
+        <div class="room-desc">Training range &mdash; private, bots only. Test any tank.</div>
+        <div class="room-count" id="roomCount-C">No other players can connect</div>
+        <div class="join-btn"><button id="joinBtn-C">ENTER TRAINING RANGE</button></div>
+      </div>
     </div>
 
     <div class="hosted-head"><h3>HOSTED ROOMS</h3><span class="hosted-sub" id="hostedCount"></span></div>
@@ -592,6 +604,15 @@
           <span class="match-timer" id="sdPoison"></span>
         </div>
         <div class="score-strip" id="scoreStrip"></div>
+      </div>
+
+      <div class="train-bar" id="trainBar">
+        <button type="button" id="trTankBtn">TANK</button>
+        <button type="button" id="trBotMinus" aria-label="Fewer bots">&minus;</button>
+        <span class="tr-count" id="trBotCount">3 BOTS</span>
+        <button type="button" id="trBotPlus" aria-label="More bots">+</button>
+        <button type="button" id="trModeBtn">BOTS: FIGHT</button>
+        <button type="button" id="trResetBtn">RESET</button>
       </div>
 
       <div class="chatbar" id="chatBar">
@@ -1416,7 +1437,10 @@
   ];
 
   // max players per sector (Room 1 stays a 4 player duel arena, Room 2 hosts up to 10)
-  const SECTOR_CAP = { A: 4, B: 10 };
+  const SECTOR_CAP = { A: 4, B: 10, C: 1 };
+  // Room 3 = private training range: bots only, every player gets their own copy, nothing is sent to other players.
+  const TRAIN_SECTOR = 'C';
+  function isTraining(){ return state.currentSector === TRAIN_SECTOR; }
   function capOf(sector){ if (SECTOR_CAP[sector]) return SECTOR_CAP[sector]; const m = getRoomMeta(sector); return m ? m.cap : 4; }
 
   const CLASSIC_OBSTACLES = [
@@ -1884,8 +1908,8 @@
     const lvl = state.upgrades.lvl;
     if (!(id in lvl)) return;
     if (lvl[id] >= STAT_MAX){ showToast('Already maxed'); return; }
-    if (state.adminUnlocked){
-      // admins spend no points -- one tap sends this stat straight to max
+    if (state.adminUnlocked || isTraining()){
+      // admins (and the training range) spend no points -- one tap sends this stat straight to max
       lvl[id] = STAT_MAX;
       showToast('ADMIN: ' + id.toUpperCase() + ' MAXED (FREE)');
     } else {
@@ -1904,7 +1928,7 @@
   function renderStatsPanel(){
     const u = state.upgrades;
     const pts = u.points;
-    const free = !!state.adminUnlocked; // admins can always open the panel and spend nothing
+    const free = !!state.adminUnlocked || isTraining(); // admins can always open the panel and spend nothing
     byId('statsPointsTag').textContent = '\u00d7' + pts;
     byId('statsPointsTag').classList.toggle('hide', pts <= 0);
     const panelEl = byId('statsPanel');
@@ -2200,8 +2224,10 @@
     const extra = [];
     list.forEach(p=>{
       const bs = p.presence && p.presence.bots, rid = p.presence && p.presence.roomId;
-      if (!Array.isArray(bs) || !rid) return;
-      const src = (p.isMe && state.bots && state.bots.length) ? state.bots : bs;   // the host reads its own live copy
+      const trainMine = rid === TRAIN_SECTOR && p.isMe;          // Room 3: only ever MY bots, read live
+      if (rid === TRAIN_SECTOR && !p.isMe) return;               // never show another player's training bots
+      if ((!Array.isArray(bs) && !trainMine) || !rid) return;
+      const src = (trainMine || (p.isMe && state.bots && state.bots.length)) ? state.bots : bs;   // the host reads its own live copy
       src.forEach(b=>extra.push({ peer: 'bot-' + p.peer + '-' + b.n, isMe: false, isBot: true, host: p.peer, presence: {
         roomId: rid, name: b.name, color: b.team || 'red', team: b.team, x: b.x, y: b.y, turretAngle: b.a,
         hp: b.hp, maxHp: b.mh, alive: b.alive !== false, score: 0, streak: 0, joinedAt: 1e15 + b.n } }));
@@ -2273,6 +2299,7 @@
           banned = true;
           serverListeners.forEach(cb=>{ try{ cb(msg); }catch(e){} });
         } else if (msg.type === 'event'){
+          if (msg.data && msg.data.roomId === TRAIN_SECTOR) return;   // ignore anything claiming to be from the training range
           const isMe = msg.from === myPeer;
           (eventListeners[msg.topic]||[]).forEach(cb=>{
             try { cb({ data: msg.data, isMe, sameTab: isMe, peer: msg.from }); } catch(e){}
@@ -2308,7 +2335,9 @@
         eventListeners[topic].push(cb);
         return ()=>{ eventListeners[topic] = eventListeners[topic].filter(x=>x!==cb); };
       },
+      refreshBots(){ peersList = peersList.filter(p=>!p.isBot); addBotPeers(peersList); },   // local only (Room 3)
       emit(topic, data){
+        if (data && data.roomId === TRAIN_SECTOR) return;   // the training range is private: nothing leaves this browser
         if (ws && ws.readyState === WebSocket.OPEN){
           ws.send(JSON.stringify({ type:'emit', topic, data }));
         }
@@ -2415,6 +2444,7 @@
     if (!state.room) return [];
     return state.room.peers().filter(p => {
       if (!p.presence || p.presence.roomId !== sector) return false;
+      if (sector === TRAIN_SECTOR && !p.isMe && !(p.isBot && p.host === state.myPeerId)) return false;   // Room 3: just me + my bots
       // Drop stale copies of ourselves: if a peer isn't our current live
       // connection but claims the exact join timestamp we set locally,
       // it's a leftover from a reconnect, not a second real player.
@@ -2453,12 +2483,13 @@
       btn.disabled = full || !!state.currentSector;
       btn.textContent = full ? 'ROOM FULL' : (state.currentSector === sector ? 'DEPLOYED' : 'DEPLOY TO ' + roomLabel(sector));
     });
+    { const btn = byId('joinBtn-C'); if (btn){ btn.disabled = !!state.currentSector || !state.connected; btn.textContent = state.currentSector === TRAIN_SECTOR ? 'IN TRAINING' : 'ENTER TRAINING RANGE'; } }
     renderHosted();
   }
 
   function roomLabel(sector){
     if (isCustomRoom(sector)){ const m = getRoomMeta(sector); return m ? m.name : 'HOSTED ROOM'; }
-    return sector === 'A' ? 'ROOM 1' : (sector === 'B' ? 'ROOM 2' : sector);
+    return sector === 'A' ? 'ROOM 1' : (sector === 'B' ? 'ROOM 2' : (sector === TRAIN_SECTOR ? 'ROOM 3 \u00b7 TRAINING' : sector));
   }
   function colorHex(id){
     const c = PALETTE.find(p=>p.id===id);
@@ -2481,6 +2512,7 @@
 
   byId('joinBtn-A').addEventListener('click', ()=>joinSector('A'));
   byId('joinBtn-B').addEventListener('click', ()=>joinSector('B'));
+  byId('joinBtn-C').addEventListener('click', ()=>joinSector(TRAIN_SECTOR));
 
   async function joinSector(sector, newMeta){
     if (!state.room || state.currentSector) return;
@@ -2603,6 +2635,7 @@
       }
       state.x = sp.x; state.y = sp.y;
       state.room.presence({ x: state.x, y: state.y });
+      if (isTraining()) trInit();
     }
     requestAnimationFrame(loop);
     renderScoreStrip();
@@ -3657,6 +3690,7 @@
     if (state.sd) sdUpdate(dt);
     else if (state.lc) lcUpdate();
     if (state.bots.length) botsUpdate(dt);
+    if (isTraining()) trDroneHits();
     updateRemoteSmoothing(dt);
     updateRemoteDrones(dt);
     if (state.alive) updateDrones(dt);
@@ -3922,6 +3956,7 @@
         x: state.x, y: state.y, roomId: state.currentSector
       });
       spawnSpark(state.x, state.y, state.color.hex, 1);
+      if (isTraining()) pushKillfeed((shooterName || '?') + ' downed ' + state.name);   // the range is private, so no kill event goes out
       if (state.roomMode === 'showdown'){
         // solo: out for good. Duo / trio: if a teammate is still alive you come back in 10s, otherwise your team has lost.
         if (state.sd && state.sdTeamSize > 0 && !state.sd.over && sdMatesAlive().length){
@@ -4335,7 +4370,10 @@
     return { n: b.n, name: b.name, team: b.team, x: b.x === undefined ? undefined : r(b.x), y: b.y === undefined ? undefined : r(b.y),
              a: r((b.a || 0) * 100) / 100, hp: r(b.hp), mh: b.mh, alive: b.alive };
   }
-  function botSync(){ if (state.room) state.room.presence({ bots: state.bots.map(botSlim) }); }
+  function botSync(){
+    if (isTraining()){ if (state.room) state.room.refreshBots(); return; }   // Room 3: purely local, no network
+    if (state.room) state.room.presence({ bots: state.bots.map(botSlim) });
+  }
 
   // which team each bot joins: top up unfinished teams first, then whole extra teams until there are 2+
   function sdBotPlan(humans, meta){
@@ -4408,12 +4446,13 @@
     b.hp = Math.max(0, b.hp - dmg);
     if (b.hp > 0) return;
     b.alive = false;
+    if (isTraining()) b.respawnAt = now + 2500;
     const ev = { shooterId: shooterId || null, shooterName: shooterName || 'THE SMOKE', victimId: botId(b), victimName: b.name, x: b.x, y: b.y, roomId: state.currentSector };
     state.room.emit('kill', ev);
     onKillEvent(ev);                                        // the server never echoes my own emits back
     const mateUp = state.bots.some(o => o !== b && o.team === b.team && o.alive) ||
       peersIn(state.currentSector).some(p => !p.isBot && (p.isMe ? state.team : p.presence.team) === b.team && (p.isMe ? state.alive : p.presence.alive !== false));
-    b.respawnAt = mateUp ? now + SD.TEAM_RESPAWN_MS : 0;   // same rule as players: back after 10s if a teammate lives
+    if (!isTraining()) b.respawnAt = mateUp ? now + SD.TEAM_RESPAWN_MS : 0;   // same rule as players: back after 10s if a teammate lives
     botSync();
   }
 
@@ -4432,7 +4471,7 @@
 
   // per frame, host only
   function botsUpdate(dt){
-    const sd = state.sd;
+    const sd = state.sd || state.tr;
     if (!sd || !state.currentSector || !state.bots.length) return;
     const now = performance.now();
     const tanks = [];
@@ -4447,6 +4486,7 @@
     for (const b of state.bots){
       if (b.x === undefined) continue;
       if (!b.alive){
+        if (isTraining()){ if (b.respawnAt && now >= b.respawnAt){ trPlaceBot(b); dirty = true; } continue; }
         if (!sd.over && b.respawnAt){
           if (!tanks.some(t => t.alive && t.team === b.team && t.bot !== b)) b.respawnAt = 0;
           else if (now >= b.respawnAt){ botRespawn(b, tanks); dirty = true; }
@@ -4454,6 +4494,7 @@
         continue;
       }
       if (sd.over) continue;
+      if (isTraining() && state.tr.dummy) continue;   // DUMMY mode: bots just stand there
       // nearest living enemy
       let tgt = null, td = 1e9;
       for (const t of tanks){
@@ -4504,6 +4545,91 @@
     }
     if (dirty || now - state.botSyncAt > 60){ state.botSyncAt = now; botSync(); }
   }
+
+  // ---------------------------------------------------------------
+  // ROOM 3 -- TRAINING RANGE. Private: only you and your own bots exist here (no other player can
+  // see or reach it, and nothing from it is sent over the network). Pick any tank, spend free upgrades,
+  // and fight bots that respawn forever -- or switch them to DUMMY to just stand still.
+  // ---------------------------------------------------------------
+  const TR_MAX_BOTS = 8;
+  function trInit(){
+    state.tr = { over: false, dummy: false, nextN: 0 };
+    state.bots = [];
+    state.adminTank = null;
+    for (let i = 0; i < 3; i++) trAddBot();
+    byId('trainBar').classList.add('show');
+    trUpdateBar();
+    showToast('TRAINING RANGE — tap TANK to try any tank. Bots respawn forever.');
+  }
+  function trAddBot(){
+    const n = state.tr.nextN++;
+    const b = { n, name: 'BOT ' + (n + 1), team: 'red', hp: MAX_HP, mh: MAX_HP, alive: true, poisonAcc: 0, dir: Math.random() < 0.5 ? 1 : -1, flipAt: 0, wander: 0, wanderA: 0, stuck: 0 };
+    state.bots.push(b);
+    trPlaceBot(b);
+  }
+  // put a bot on a free spot, well away from the player
+  function trPlaceBot(b){
+    let best = null, bestD = -1;
+    for (let k = 0; k < 60; k++){
+      const x = 80 + Math.random() * (ARENA_W - 160), y = 80 + Math.random() * (ARENA_H - 160);
+      if (!canOccupy(x, y)) continue;
+      const d = Math.hypot(x - state.x, y - state.y);
+      if (d > bestD){ best = { x, y }; bestD = d; }
+      if (d > 600) break;
+    }
+    if (!best) best = mapSpawnPoints()[0];
+    const now = performance.now();
+    b.x = best.x; b.y = best.y; b.a = Math.atan2(state.y - b.y, state.x - b.x);
+    b.hp = b.mh; b.alive = true; b.respawnAt = 0; b.inv = now + 1500; b.nextShot = now + 1500 + Math.random() * 800;
+    botSync();
+  }
+  function trUpdateBar(){
+    if (!state.tr) return;
+    byId('trTankBtn').textContent = 'TANK: ' + (state.adminTank ? tankLabelOf(state.adminTank) : 'AUTO');
+    byId('trBotCount').textContent = state.bots.length + (state.bots.length === 1 ? ' BOT' : ' BOTS');
+    byId('trModeBtn').textContent = 'BOTS: ' + (state.tr.dummy ? 'DUMMY' : 'FIGHT');
+  }
+  function trSetBotCount(delta){
+    if (!state.tr) return;
+    if (delta > 0 && state.bots.length < TR_MAX_BOTS) trAddBot();
+    else if (delta < 0 && state.bots.length > 0) state.bots.pop();
+    botSync(); trUpdateBar();
+  }
+  // my drones (Necromancer / Overseer / Overlord) hurt bots the same way a bot's drones would hurt me
+  function trDroneHits(){
+    if (!state.drones.length || !state.alive) return;
+    const reach = TANK_R + DRONE_SIZE * 0.5;
+    for (const dr of state.drones){
+      if (dr.hp <= 0) continue;
+      for (const b of state.bots){
+        if (!b.alive || b.x === undefined) continue;
+        if (Math.hypot(dr.x - b.x, dr.y - b.y) > reach) continue;
+        spawnSpark(dr.x, dr.y, state.color.hex);
+        dr.hp = 0;
+        botDamage(b, effectiveDamage() * 2, state.myPeerId, state.name);
+        break;
+      }
+    }
+  }
+  byId('trBotMinus').addEventListener('click', ()=>trSetBotCount(-1));
+  byId('trBotPlus').addEventListener('click', ()=>trSetBotCount(1));
+  byId('trModeBtn').addEventListener('click', ()=>{ if (!state.tr) return; state.tr.dummy = !state.tr.dummy; trUpdateBar(); });
+  byId('trResetBtn').addEventListener('click', ()=>{
+    if (!state.tr) return;
+    state.bots.forEach(b => trPlaceBot(b));
+    state.hp = effectiveMaxHp(); state.alive = true; state.invincibleUntil = performance.now() + 1500;
+    byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
+    state.room.presence({ hp: state.hp, alive: true });
+    showToast('RANGE RESET');
+  });
+  byId('trTankBtn').addEventListener('click', ()=>{
+    if (!isTraining()) return;
+    adminPickedTank = state.adminTank;
+    buildAdminGrid();
+    showAdminTankStep();
+    byId('adminPanelTitle').textContent = 'TRAINING — CHOOSE TANK';
+    byId('adminBackdrop').classList.add('show');
+  });
 
   function sdAlivePeers(){
     return peersIn(state.currentSector).filter(p => p.isMe ? state.alive : p.presence.alive !== false);
@@ -4806,7 +4932,7 @@
     if (!fromChest) state.streak += n;
     state.room.presence({ score: state.score, streak: state.streak });
     grantStatPoint(n);
-    for (let s = before + 1; s <= state.score; s++){
+    for (let s = before + 1; s <= state.score && !isTraining(); s++){
       if (s === FIRST_PICK_KILLS){
         offerLoadoutChoice(1);
       }
@@ -5279,7 +5405,7 @@
     state.adminTank = null; closeCmd(); closeAdmin(); closeLogin(); closeChat();
     state.waitingToStart = false; closeWaitPanel();
     state.color = state.chosenColor;   // give back the colour the player picked (team rooms override it while inside)
-    state.bots = [];
+    state.bots = []; state.tr = null; byId('trainBar').classList.remove('show');
     if (state.room) state.room.presence({ roomId: null, roomMeta: null, bots: null, adminTank: null, alive:false, team: null, carrying: null, color: state.chosenColor.id });
     if (state.unsubShoot) state.unsubShoot();
     if (state.unsubKill) state.unsubKill();
@@ -5991,6 +6117,7 @@
   }
   function selectAdminTank(id){
     adminPickedTank = id || null;
+    if (isTraining()){ setAdminTank(id); closeAdmin(); return; }   // Room 3: pick for yourself, no player step
     refreshAdminGrid();
     showAdminPlayerStep();
   }
@@ -6380,20 +6507,20 @@
   }
   function closeAdmin(){ byId('adminBackdrop').classList.remove('show'); }
   function setAdminTank(id){
-    if (!state.adminUnlocked) return;
+    if (!state.adminUnlocked && !isTraining()) return;
     const wasNecro = isDroneTank(resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1));
     state.adminTank = id || null;
     const isNecro = isDroneTank(resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1));
     if (wasNecro && !isNecro) clearMyDrones();
     if (state.room) state.room.presence({ adminTank: state.adminTank });
-    refreshAdminGrid();
+    refreshAdminGrid(); trUpdateBar();
     showToast('YOUR TANK: ' + tankLabelOf(state.adminTank));
   }
   // Picks up an admin remotely switching OUR tank via adminSetTank -- that
   // lands as a presence change from the server, not a local call, so it
   // wouldn't otherwise touch state.adminTank (which drives our own render).
   function syncAdminTankFromPresence(){
-    if (!state.room || !state.currentSector) return;
+    if (!state.room || !state.currentSector || isTraining()) return;   // Room 3 picks are local (the server only echoes admin picks)
     const mine = state.room.peers().find(p=>p.isMe);
     if (!mine) return;
     const remoteTank = mine.presence.adminTank || null;
