@@ -369,6 +369,8 @@
   .train-bar.show { display:flex; }
   .train-bar button, .train-bar .tr-count { height:28px; padding:0 10px; background:rgba(var(--panel-rgb),0.85); border:1px solid var(--line-bright); color:var(--green); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:0.06em; display:flex; align-items:center; justify-content:center; }
   .train-bar button:hover { border-color:var(--green); }
+  .train-bar.collapsed > *:not(#trHideBtn) { display:none; }
+
   .train-bar .tr-count { color:var(--ink-dim); min-width:70px; }
   .hosted-head { width:100%; display:flex; align-items:baseline; gap:12px; margin:30px 0 12px; }
   .hosted-head h3 { font-size:22px; color:var(--ink); }
@@ -614,6 +616,7 @@
       </div>
 
       <div class="train-bar" id="trainBar">
+        <button type="button" id="trHideBtn" aria-expanded="true" title="Hide / show the training panel">HIDE PANEL</button>
         <button type="button" id="trTankBtn">TANK</button>
         <button type="button" id="trBotMinus" aria-label="Fewer bots">&minus;</button>
         <span class="tr-count" id="trBotCount">3 BOTS</span>
@@ -2649,7 +2652,7 @@
       }
       state.x = sp.x; state.y = sp.y;
       state.room.presence({ x: state.x, y: state.y });
-      if (state.bots.some(b => b.hosted)) hbPlaceAll();   // host-added bots spawn now that the match is live
+      if (state.bots.some(b => b.free)) hbPlaceAll();   // host-added bots spawn now that the match is live
       if (isTraining()) trInit();
     }
     requestAnimationFrame(loop);
@@ -2693,7 +2696,7 @@
         const lv = TR_LEVELS[p.presence.botLvl];
         const tag = document.createElement('span');
         tag.className = 'bot-tag';
-        tag.textContent = 'BOT' + (lv ? ' \u00b7 ' + lv.name : '') + (meta && meta.mode === 'teams' && p.presence.team ? ' \u00b7 ' + p.presence.team.toUpperCase() : '');
+        tag.textContent = 'BOT' + (lv ? ' \u00b7 ' + lv.name : '') + (p.presence.team ? ' \u00b7 ' + p.presence.team.toUpperCase() : '');   // TEAMS and duo / trio Showdown both show the bot's side
         row.appendChild(tag);
         const mine = iAmHost && p.host === state.myPeerId ? state.bots.find(x => botId(x) === p.peer) : null;
         if (mine){
@@ -2714,6 +2717,7 @@
       box.appendChild(row);
     });
 
+    if (iAmHost && hbSdFix()) botSync();
     const botBar = byId('waitBotBar');
     const canBots = iAmHost && hbAllowed(meta);
     botBar.style.display = canBots ? 'flex' : 'none';
@@ -2756,11 +2760,11 @@
   byId('waitStartBtn').addEventListener('click', ()=>{
     if (!state.waitingToStart || !state.currentSector) return;
     const meta = getRoomMeta(state.currentSector) || normMeta(null);
-    if (meta.mode === 'showdown') state.bots = [];   // Showdown fills seats itself; FFA / TEAMS keep the bots the host added
+    if (meta.mode === 'showdown') state.bots = state.bots.filter(b => b.hosted && meta.teams);   // Showdown keeps host-added bots (duo / trio only) and fills the rest itself
     if (meta.mode === 'showdown'){
       const humans = peersIn(state.currentSector).filter(p => !p.isBot).sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
       const prob = sdCountProblem(humans.length, meta); if (prob){ showToast(prob); return; }
-      state.bots = sdBotPlan(humans, meta);   // duo / trio: bots fill the empty seats
+      state.bots = sdBotPlan(humans, meta, state.bots);   // duo / trio: host bots keep their seats, auto bots fill what's left
     }
     state.room.presence({ roomMeta: Object.assign({}, meta, { started: true }), bots: state.bots.length ? state.bots.map(botSlim) : null });
   });
@@ -4433,16 +4437,25 @@
   }
 
   // which team each bot joins: top up unfinished teams first, then whole extra teams until there are 2+
-  function sdBotPlan(humans, meta){
-    const size = sdSizeOfMeta(meta), need = sdBotsNeeded(humans.length, meta), out = [];
-    if (!size || !need) return out;
-    const per = {};   // humans per team (teams follow join order: 1st pair/trio = red, 2nd = blue, ...)
+  function sdBotPlan(humans, meta, hostBots){
+    hostBots = hostBots || [];
+    const size = sdSizeOfMeta(meta), total = humans.length + hostBots.length, need = sdBotsNeeded(total, meta), out = hostBots.slice();
+    if (!size) return [];
+    hbSdAssign(meta, humans, hostBots);
+    if (!need) return out;
+    const per = {};   // seats taken per team: humans in join order, then the host's bots
     humans.forEach((p, i) => { const t = SD_TEAM_IDS[Math.floor(i / size) % SD_TEAM_IDS.length]; per[t] = (per[t] || 0) + 1; });
-    const teamCount = (humans.length + need) / size;
-    for (let ti = 0; ti < teamCount && out.length < need; ti++){
+    hostBots.forEach(b => { per[b.team] = (per[b.team] || 0) + 1; });
+    const used = new Set(hostBots.map(b => b.name)), teamCount = (total + need) / size;
+    let made = 0, k = 1;
+    for (let ti = 0; ti < teamCount && made < need; ti++){
       const t = SD_TEAM_IDS[ti % SD_TEAM_IDS.length];
-      for (let k = per[t] || 0; k < size && out.length < need; k++)
-        out.push({ n: out.length, name: 'BOT ' + (out.length + 1), team: t, hp: MAX_HP, mh: MAX_HP, alive: true });
+      for (let c = per[t] || 0; c < size && made < need; c++){
+        while (used.has('BOT ' + k)) k++;
+        used.add('BOT ' + k);
+        out.push({ n: made, name: 'BOT ' + k, team: t, hp: MAX_HP, mh: MAX_HP, alive: true });
+        made++;
+      }
     }
     return out;
   }
@@ -4583,13 +4596,13 @@
     b.hp = Math.max(0, b.hp - dmg);
     if (b.hp > 0) return;
     b.alive = false;
-    if (isTraining() || b.hosted) b.respawnAt = now + (b.hosted ? 3000 : 2500);   // training + host-added bots come back on their own
+    if (isTraining() || b.free) b.respawnAt = now + (b.free ? 3000 : 2500);   // training + host-added bots come back on their own
     const ev = { shooterId: shooterId || null, shooterName: shooterName || 'THE SMOKE', victimId: botId(b), victimName: b.name, x: b.x, y: b.y, roomId: state.currentSector };
     state.room.emit('kill', ev);
     onKillEvent(ev);                                        // the server never echoes my own emits back
     const mateUp = state.bots.some(o => o !== b && o.team === b.team && o.alive) ||
       peersIn(state.currentSector).some(p => !p.isBot && (p.isMe ? state.team : p.presence.team) === b.team && (p.isMe ? state.alive : p.presence.alive !== false));
-    if (!isTraining() && !b.hosted) b.respawnAt = mateUp ? now + SD.TEAM_RESPAWN_MS : 0;   // same rule as players: back after 10s if a teammate lives
+    if (!isTraining() && !b.free) b.respawnAt = mateUp ? now + SD.TEAM_RESPAWN_MS : 0;   // same rule as players: back after 10s if a teammate lives
     botSync();
   }
 
@@ -4624,7 +4637,7 @@
       if (b.x === undefined) continue;
       const C = botCfg(b);
       if (!b.alive){
-        if (isTraining() || b.hosted){ if (b.respawnAt && now >= b.respawnAt){ if (b.hosted) hbPlace(b); else trPlaceBot(b); dirty = true; } continue; }
+        if (isTraining() || b.free){ if (b.respawnAt && now >= b.respawnAt){ if (b.free) hbPlace(b); else trPlaceBot(b); dirty = true; } continue; }
         if (!sd.over && b.respawnAt){
           if (!tanks.some(t => t.alive && t.team === b.team && t.bot !== b)) b.respawnAt = 0;
           else if (now >= b.respawnAt){ botRespawn(b, tanks); dirty = true; }
@@ -4740,7 +4753,23 @@
     b.tank = t === 'single' ? null : t;   // null = plain starter tank
   }
   const TIER1_TANKS_LIST = ['twin', 'machinegun', 'sniper'];
-  function hbAllowed(meta){ return !!meta && (meta.mode === 'ffa' || meta.mode === 'teams'); }
+  function hbAllowed(meta){ return !!meta && (meta.mode === 'ffa' || meta.mode === 'teams' || (meta.mode === 'showdown' && !!meta.teams)); }   // duo / trio Showdown included
+  const hbIsSd = (meta) => !!meta && meta.mode === 'showdown';
+  function hbSdMaxMembers(meta){ const size = sdSizeOfMeta(meta); return size * (size === 3 ? 3 : 5); }   // duo up to 5 teams, trio up to 3
+  // Showdown duo / trio: humans take seats in join order (1st pair/trio = red, 2nd = blue ...); host bots fill the first teams with a gap
+  function hbSdAssign(meta, humans, bots){
+    const size = sdSizeOfMeta(meta), per = {};
+    humans.forEach((p, i) => { const t = SD_TEAM_IDS[Math.floor(i / size) % SD_TEAM_IDS.length]; per[t] = (per[t] || 0) + 1; });
+    let changed = false;
+    bots.forEach(b => {
+      let t = null;
+      for (let k = 0; k < SD_TEAM_IDS.length && !t; k++){ const id = SD_TEAM_IDS[k]; if ((per[id] || 0) < size) t = id; }
+      t = t || SD_TEAM_IDS[0];
+      per[t] = (per[t] || 0) + 1;
+      if (b.team !== t){ b.team = t; b.color = t; changed = true; }
+    });
+    return changed;
+  }
   function hbCanEdit(){
     const sector = state.currentSector;
     return !!sector && state.waitingToStart && isRoomHost(sector) && hbAllowed(getRoomMeta(sector));
@@ -4755,7 +4784,12 @@
     const sector = state.currentSector, meta = getRoomMeta(sector);
     if (state.bots.length >= HB_MAX_BOTS){ showToast('Max ' + HB_MAX_BOTS + ' bots per room.'); return; }
     let team = null, color;
-    if (meta.mode === 'teams'){
+    if (hbIsSd(meta)){
+      const humans = peersIn(sector).filter(p => !p.isBot);
+      if (humans.length + state.bots.length >= hbSdMaxMembers(meta)){ showToast('Every team seat is taken.'); return; }
+      const probe = { team: null }; hbSdAssign(meta, humans, state.bots.concat(probe));   // team the new bot would land on
+      team = probe.team; color = team;
+    } else if (meta.mode === 'teams'){
       const counts = { red: 0, blue: 0 };
       peersIn(sector).forEach(p => { if (counts[p.presence.team] !== undefined) counts[p.presence.team]++; });
       team = counts.red <= counts.blue ? 'red' : 'blue';
@@ -4765,7 +4799,7 @@
       const free = PALETTE.find(c => !used.has(c.id));
       color = (free || PALETTE[hbNextN % PALETTE.length]).id;
     }
-    const b = { n: 1000 + hbNextN++, name: hbFreeName(), team, color, lvl, hosted: true, tank: null, score: 0, pts: 0, up: hbFreshUp(), l1: null, l7: null, l20: null,
+    const b = { n: 1000 + hbNextN++, name: hbFreeName(), team, color, lvl, hosted: true, free: !hbIsSd(meta), tank: null, score: 0, pts: 0, up: hbFreshUp(), l1: null, l7: null, l20: null,
       hp: MAX_HP, mh: MAX_HP, alive: true, poisonAcc: 0, dir: Math.random() < 0.5 ? 1 : -1, flipAt: 0, wander: 0, wanderA: 0, stuck: 0 };
     state.bots.push(b);
     botSync(); renderWaitPanel();
@@ -4773,7 +4807,16 @@
   function hbRemove(n){
     if (!hbCanEdit()) return;
     state.bots = state.bots.filter(b => b.n !== n);
+    hbSdFix();
     botSync(); renderWaitPanel();
+  }
+  // Showdown waiting room: re-seat host bots whenever humans come or go (called from the waiting-room render)
+  function hbSdFix(){
+    const sector = state.currentSector, meta = sector && getRoomMeta(sector);
+    if (!hbIsSd(meta) || !meta.teams) return false;
+    const mine = state.bots.filter(b => b.hosted);
+    if (!mine.length) return false;
+    return hbSdAssign(meta, peersIn(sector).filter(p => !p.isBot).sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0)), mine);
   }
   function hbSetLevel(n, lvl){
     if (!hbCanEdit() || !TR_LEVELS[lvl]) return;
@@ -4805,7 +4848,7 @@
     b.stuck = 0; b.wander = 0;
     if (!skipSync) botSync();
   }
-  function hbPlaceAll(){ state.bots.forEach(b => { if (b.hosted) hbPlace(b, true); }); botSync(); }
+  function hbPlaceAll(){ state.bots.forEach(b => { if (b.free) hbPlace(b, true); }); botSync(); }
   byId('waitAddBotBtn').addEventListener('click', () => hbAddBot(hbNextLvl));
   byId('waitBotLvlBtn').addEventListener('click', () => { hbNextLvl = (hbNextLvl + 1) % TR_LEVELS.length; renderWaitPanel(); });
 
@@ -4898,6 +4941,12 @@
     byId('hudSelfHealth').textContent = 'HP ' + hp1(state.hp) + ' / ' + effectiveMaxHp();
     state.room.presence({ hp: state.hp, alive: true });
     showToast('RANGE RESET');
+  });
+  byId('trHideBtn').addEventListener('click', (e)=>{
+    const bar = byId('trainBar'), hidden = bar.classList.toggle('collapsed');
+    e.currentTarget.textContent = hidden ? 'SHOW PANEL' : 'HIDE PANEL';
+    e.currentTarget.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+    e.currentTarget.blur();   // keep Space / Enter for the game
   });
   byId('trTankBtn').addEventListener('click', ()=>{
     if (!isTraining()) return;
@@ -5191,7 +5240,7 @@
   function sdRebalanceWaiting(){
     const sector = state.currentSector, meta = getRoomMeta(sector);
     if (!meta || meta.mode !== 'showdown' || !meta.teams) return;
-    const list = peersIn(sector).slice().sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
+    const list = peersIn(sector).filter(p => !p.isBot).sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
     const idx = list.findIndex(p => p.isMe);
     if (idx < 0) return;
     const want = SD_TEAM_IDS[Math.floor(idx / sdSizeOfMeta(meta)) % SD_TEAM_IDS.length];
@@ -5942,7 +5991,7 @@
   function assignTeam(sector, meta){
     if (meta && meta.mode === 'showdown' && meta.teams){
       // duo / trio: teammates are consecutive in join order (1-2 red, 3-4 blue, ...)
-      const size = sdSizeOfMeta(meta), n = peersIn(sector).length;
+      const size = sdSizeOfMeta(meta), n = peersIn(sector).filter(p => !p.isBot).length;   // bots don't take a human's seat
       return SD_TEAM_IDS[Math.floor(n / size) % SD_TEAM_IDS.length];
     }
     const counts = { red:0, blue:0 };
