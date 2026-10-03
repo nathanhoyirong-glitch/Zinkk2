@@ -611,6 +611,8 @@
         <button type="button" id="trBotMinus" aria-label="Fewer bots">&minus;</button>
         <span class="tr-count" id="trBotCount">3 BOTS</span>
         <button type="button" id="trBotPlus" aria-label="More bots">+</button>
+        <button type="button" id="trBotTankBtn">BOT TANK: MIXED</button>
+        <button type="button" id="trLevelBtn">LEVEL: NORMAL</button>
         <button type="button" id="trModeBtn">BOTS: FIGHT</button>
         <button type="button" id="trResetBtn">RESET</button>
       </div>
@@ -2230,7 +2232,7 @@
       const src = (trainMine || (p.isMe && state.bots && state.bots.length)) ? state.bots : bs;   // the host reads its own live copy
       src.forEach(b=>extra.push({ peer: 'bot-' + p.peer + '-' + b.n, isMe: false, isBot: true, host: p.peer, presence: {
         roomId: rid, name: b.name, color: b.team || 'red', team: b.team, x: b.x, y: b.y, turretAngle: b.a,
-        hp: b.hp, maxHp: b.mh, alive: b.alive !== false, score: 0, streak: 0, joinedAt: 1e15 + b.n } }));
+        hp: b.hp, maxHp: b.mh, alive: b.alive !== false, score: 0, streak: 0, adminTank: b.tank || null, joinedAt: 1e15 + b.n } }));
     });
     extra.forEach(e=>list.push(e));
   }
@@ -4363,6 +4365,14 @@
   // Humans shoot bots exactly like players: the shooter's client sends 'bulletHit' and the host applies it.
   // ---------------------------------------------------------------
   const BOT = { SPEED: 215, FIRE_MS: 950, DMG: 20, ERR: 0.14, SEE: 720, KEEP_MIN: 200, KEEP_MAX: 400, TURN: 6 };
+  // Room 3 difficulty presets (everywhere else the bots use BOT as before)
+  const TR_LEVELS = [
+    { name: 'EASY',   SPEED: 150, FIRE_MS: 1500, DMG: 10, ERR: 0.38, SEE: 560, KEEP_MIN: 240, KEEP_MAX: 460, TURN: 2.8 },
+    { name: 'NORMAL', SPEED: 215, FIRE_MS: 950,  DMG: 20, ERR: 0.14, SEE: 720, KEEP_MIN: 200, KEEP_MAX: 400, TURN: 6 },
+    { name: 'HARD',   SPEED: 255, FIRE_MS: 620,  DMG: 20, ERR: 0.06, SEE: 900, KEEP_MIN: 180, KEEP_MAX: 360, TURN: 9 },
+    { name: 'INSANE', SPEED: 300, FIRE_MS: 380,  DMG: 28, ERR: 0.015, SEE: 1200, KEEP_MIN: 160, KEEP_MAX: 320, TURN: 14 },
+  ];
+  function botCfg(){ return isTraining() && state.tr ? TR_LEVELS[state.tr.level] : BOT; }
   function botId(b){ return 'bot-' + state.myPeerId + '-' + b.n; }
   function isMyBotId(id){ return typeof id === 'string' && !!state.myPeerId && id.indexOf('bot-' + state.myPeerId + '-') === 0; }
   function botSlim(b){
@@ -4408,24 +4418,102 @@
     botSync();
   }
 
-  function botLOS(ax, ay, bx, by){
+  // coarse walkable grid + BFS so bots route around walls (cached per map)
+  const BP_CELL = 40;
+  let bpGrid = null;
+  function bpBuild(){
+    const key = ACTIVE_MAP + ':' + ARENA_W + 'x' + ARENA_H;
+    if (bpGrid && bpGrid.key === key) return bpGrid;
+    const cols = Math.ceil(ARENA_W / BP_CELL), rows = Math.ceil(ARENA_H / BP_CELL), ok = new Uint8Array(cols * rows);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) ok[r * cols + c] = canOccupy((c + 0.5) * BP_CELL, (r + 0.5) * BP_CELL) ? 1 : 0;
+    return (bpGrid = { key, cols, rows, ok });
+  }
+  function bpCell(g, x, y){ return Math.max(0, Math.min(g.rows - 1, Math.floor(y / BP_CELL))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.floor(x / BP_CELL))); }
+  function bpFind(g, sx, sy, tx, ty){
+    const start = bpCell(g, sx, sy);
+    let goal = bpCell(g, tx, ty);
+    const prev = new Int32Array(g.cols * g.rows).fill(-2);
+    const q = [start]; prev[start] = -1;
+    let reached = -1, bestH = 1e9, bestC = start;
+    const gx = goal % g.cols, gy = Math.floor(goal / g.cols);
+    for (let qi = 0; qi < q.length; qi++){
+      const cur = q[qi], cx = cur % g.cols, cy = Math.floor(cur / g.cols);
+      const h = Math.abs(cx - gx) + Math.abs(cy - gy);
+      if (h < bestH){ bestH = h; bestC = cur; }
+      if (h <= 1){ reached = cur; break; }
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
+        if (!dx && !dy) continue;
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= g.cols || ny >= g.rows) continue;
+        const ni = ny * g.cols + nx;
+        if (prev[ni] !== -2 || !g.ok[ni]) continue;
+        if (dx && dy && (!g.ok[cy * g.cols + nx] || !g.ok[ny * g.cols + cx])) continue;   // no cutting corners
+        prev[ni] = cur; q.push(ni);
+      }
+    }
+    if (reached < 0) reached = bestC;
+    const path = [];
+    for (let c = reached; c >= 0 && c !== start; c = prev[c]) path.push({ x: (c % g.cols + 0.5) * BP_CELL, y: (Math.floor(c / g.cols) + 0.5) * BP_CELL });
+    return path.reverse();
+  }
+  // next waypoint toward the target (re-planned twice a second)
+  function botPathStep(b, tgt, now){
+    if (!b.path || now > b.pathAt){ b.path = bpFind(bpBuild(), b.x, b.y, tgt.x, tgt.y); b.pathAt = now + 500; }
+    while (b.path.length && Math.hypot(b.path[0].x - b.x, b.path[0].y - b.y) < BP_CELL * 0.6) b.path.shift();
+    if (!b.path.length) return null;
+    // look a couple of cells ahead as long as the way is clear, so movement is smooth
+    let wp = b.path[0];
+    for (let i = 1; i < Math.min(4, b.path.length); i++){ if (botLOS(b.x, b.y, b.path[i].x, b.path[i].y, TANK_R + 2)) wp = b.path[i]; else break; }
+    return wp;
+  }
+
+  function botLOS(ax, ay, bx, by, rad){
+    rad = rad || 3;
     const n = Math.ceil(Math.hypot(bx - ax, by - ay) / 30);
     for (let i = 1; i < n; i++){
       const x = ax + (bx - ax) * i / n, y = ay + (by - ay) * i / n;
-      for (const o of OBSTACLES) if (rectCircleCollide(x, y, 3, o)) return false;
+      for (const o of OBSTACLES) if (rectCircleCollide(x, y, rad, o)) return false;
     }
     return true;
   }
 
   function botFire(b){
-    const ang = b.a + (Math.random() - 0.5) * 2 * BOT.ERR;
-    const x = b.x + Math.cos(ang) * (TANK_R + 12), y = b.y + Math.sin(ang) * (TANK_R + 12);
-    const hitW = muzzleBlockedAt(b.x, b.y, x, y, BULLET_R);
-    if (hitW){ spawnSpark(hitW.x, hitW.y, colorHex(b.team)); return; }
-    const id = botId(b) + '-' + Math.floor(performance.now()) + '-' + Math.floor(Math.random() * 1000);
-    spawnBullet(id, botId(b), b.name, x, y, ang, colorHex(b.team), BULLET_SPEED, BOT.DMG, false, b.team, 0, BULLET_R, false);
-    state.room.emit('shoot', { shots: [{ id, x, y, angle: ang, r: BULLET_R }], shooterId: botId(b), shooterName: b.name,
-      color: b.team, team: b.team, roomId: state.currentSector, speed: BULLET_SPEED, damage: BOT.DMG, square: false, pierce: 0 });
+    const C = botCfg();
+    const def = b.tank && LOADOUTS[b.tank];
+    const tune = def || {};
+    const spd = BULLET_SPEED * (tune.speedMul || 1);
+    const dmg = C.DMG * (tune.dmgMul || 1);
+    const aim = b.a + (Math.random() - 0.5) * 2 * C.ERR;
+    const color = colorHex(b.team);
+    let shots = [];
+    const stamp = botId(b) + '-' + Math.floor(performance.now());
+    if (!def || isDroneTank(b.tank) || def.burst){
+      // plain single shot (also used for drone / burst tanks, which bots can't fully imitate)
+      shots = [{ x: b.x + Math.cos(aim) * (TANK_R + 12), y: b.y + Math.sin(aim) * (TANK_R + 12), angle: aim, r: BULLET_R }];
+    } else {
+      const scale = TANK_R / def.radius, baseRot = aim + def.rotOffset;
+      const spreadKinds = ['triple','quintet','omni','quad','octo','destroyer','firework'];
+      shots = def.barrels.map(barrel => {
+        const tip = baseRot + barrel.angle, dist = barrel.dist * scale;
+        let ang;
+        if (barrel.aim !== undefined) ang = baseRot + barrel.aim;
+        else if (spreadKinds.indexOf(b.tank) >= 0) ang = tip;
+        else if (b.tank === 'parallel' || b.tank === 'necro'){
+          let diff = tip - aim; while (diff > Math.PI) diff -= Math.PI * 2; while (diff < -Math.PI) diff += Math.PI * 2;
+          ang = Math.abs(diff) < Math.PI / 2 ? aim : aim + Math.PI;
+        } else ang = aim;
+        if (def.spread) ang += (Math.random() - 0.5) * 2 * def.spread;
+        return { x: b.x + Math.cos(tip) * dist, y: b.y + Math.sin(tip) * dist, angle: ang, r: def.bulletRadius ? def.bulletRadius * scale : BULLET_R };
+      });
+    }
+    shots = shots.filter(sh => { const hitW = muzzleBlockedAt(b.x, b.y, sh.x, sh.y, BULLET_R); if (hitW){ spawnSpark(hitW.x, hitW.y, color); return false; } return true; });
+    if (!shots.length) return;
+    shots.forEach((sh, i) => {
+      sh.id = stamp + '-' + i + '-' + Math.floor(Math.random() * 1000);
+      spawnBullet(sh.id, botId(b), b.name, sh.x, sh.y, sh.angle, color, spd, dmg, b.tank === 'necro', b.team, 0, sh.r, b.tank === 'firework');
+    });
+    state.room.emit('shoot', { shots, shooterId: botId(b), shooterName: b.name,
+      color: b.team, team: b.team, roomId: state.currentSector, speed: spd, damage: dmg, square: false, pierce: 0 });
   }
 
   function botHit(peerId, bulletId, shooterId, shooterName, dmg){
@@ -4483,6 +4571,7 @@
     });
     state.bots.forEach(b => { if (b.x !== undefined) tanks.push({ id: botId(b), team: b.team, x: b.x, y: b.y, alive: b.alive, bot: b }); });
     let dirty = false;
+    const C = botCfg();
     for (const b of state.bots){
       if (b.x === undefined) continue;
       if (!b.alive){
@@ -4509,31 +4598,38 @@
         const a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x); mx = Math.cos(a); my = Math.sin(a);   // run from the smoke
       } else if (b.wander > now){
         mx = Math.cos(b.wanderA); my = Math.sin(b.wanderA);                                              // got stuck: shake loose
+      } else if (tgt && !botLOS(b.x, b.y, tgt.x, tgt.y, TANK_R + 2)){
+        // a wall is in the way: walk around it along a real path instead of grinding against it
+        const wp = botPathStep(b, tgt, now);
+        if (wp){ const a = Math.atan2(wp.y - b.y, wp.x - b.x); mx = Math.cos(a); my = Math.sin(a); }
+        else { const a = Math.atan2(tgt.y - b.y, tgt.x - b.x); mx = Math.cos(a); my = Math.sin(a); }
       } else if (tgt){
         const a = Math.atan2(tgt.y - b.y, tgt.x - b.x);
-        if (td > BOT.KEEP_MAX){ mx = Math.cos(a); my = Math.sin(a); }
-        else if (td < BOT.KEEP_MIN){ mx = -Math.cos(a); my = -Math.sin(a); }
-        if (now > b.flipAt){ b.dir = -b.dir; b.flipAt = now + 700 + Math.random() * 1300; }
-        mx += -Math.sin(a) * b.dir * 0.8; my += Math.cos(a) * b.dir * 0.8;                              // strafe
+        if (td > C.KEEP_MAX){ mx = Math.cos(a); my = Math.sin(a); }
+        else if (td < C.KEEP_MIN){ mx = -Math.cos(a); my = -Math.sin(a); }
+        else { mx = Math.cos(a) * 0.25; my = Math.sin(a) * 0.25; }                                      // in the sweet spot: circle, don't shuffle
+        if (now > b.flipAt){ b.dir = -b.dir; b.flipAt = now + 1500 + Math.random() * 2200; }
+        mx += -Math.sin(a) * b.dir * 0.9; my += Math.cos(a) * b.dir * 0.9;                              // strafe
       } else {
         const a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x); mx = Math.cos(a) * 0.5; my = Math.sin(a) * 0.5;
       }
       const len = Math.hypot(mx, my);
       if (len > 0.01){
-        const nx = b.x + mx / len * BOT.SPEED * dt, ny = b.y + my / len * BOT.SPEED * dt;
+        const nx = b.x + mx / len * C.SPEED * dt, ny = b.y + my / len * C.SPEED * dt;
         let moved = false;
         if (canOccupy(nx, b.y)){ b.x = nx; moved = true; }
         if (canOccupy(b.x, ny)){ b.y = ny; moved = true; }
         b.stuck = moved ? 0 : b.stuck + dt;
+        if (!moved || !canOccupy(nx, ny)) b.dir = -b.dir;   // blocked while strafing: circle the other way
         if (b.stuck > 0.35){ b.stuck = 0; b.wander = now + 600 + Math.random() * 500; b.wanderA = Math.random() * Math.PI * 2; b.dir = -b.dir; }
       }
       // aim + shoot
-      if (tgt && td < BOT.SEE){
+      if (tgt && td < C.SEE){
         const want = Math.atan2(tgt.y - b.y, tgt.x - b.x);
         let da = want - b.a; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
-        b.a += Math.max(-BOT.TURN * dt, Math.min(BOT.TURN * dt, da));
+        b.a += Math.max(-C.TURN * dt, Math.min(C.TURN * dt, da));
         if (Math.abs(da) < 0.25 && now >= b.nextShot && botLOS(b.x, b.y, tgt.x, tgt.y)){
-          b.nextShot = now + BOT.FIRE_MS * (0.9 + Math.random() * 0.4);
+          b.nextShot = now + C.FIRE_MS * ((b.tank && LOADOUTS[b.tank] && LOADOUTS[b.tank].fireMul) || 1) * (0.9 + Math.random() * 0.4);
           botFire(b);
         }
       } else if (len > 0.01) b.a = Math.atan2(my, mx);
@@ -4552,8 +4648,9 @@
   // and fight bots that respawn forever -- or switch them to DUMMY to just stand still.
   // ---------------------------------------------------------------
   const TR_MAX_BOTS = 8;
+  let trPicking = 'me';   // which tank the shared picker is choosing: mine or the bots'
   function trInit(){
-    state.tr = { over: false, dummy: false, nextN: 0 };
+    state.tr = { over: false, dummy: false, nextN: 0, level: 1, botTank: null };   // botTank null = MIXED (random)
     state.bots = [];
     state.adminTank = null;
     for (let i = 0; i < 3; i++) trAddBot();
@@ -4561,9 +4658,11 @@
     trUpdateBar();
     showToast('TRAINING RANGE — tap TANK to try any tank. Bots respawn forever.');
   }
+  const TR_BOT_TANKS = ['single','twin','machinegun','sniper','gunner','triple','parallel','quad','octo','destroyer','hunter','predator','quintet','quadtwin','triplet','omni'];
+  function trPickTank(){ return state.tr.botTank || TR_BOT_TANKS[Math.floor(Math.random() * TR_BOT_TANKS.length)]; }
   function trAddBot(){
     const n = state.tr.nextN++;
-    const b = { n, name: 'BOT ' + (n + 1), team: 'red', hp: MAX_HP, mh: MAX_HP, alive: true, poisonAcc: 0, dir: Math.random() < 0.5 ? 1 : -1, flipAt: 0, wander: 0, wanderA: 0, stuck: 0 };
+    const b = { n, name: 'BOT ' + (n + 1), team: 'red', tank: trPickTank(), hp: MAX_HP, mh: MAX_HP, alive: true, poisonAcc: 0, dir: Math.random() < 0.5 ? 1 : -1, flipAt: 0, wander: 0, wanderA: 0, stuck: 0 };
     state.bots.push(b);
     trPlaceBot(b);
   }
@@ -4580,7 +4679,8 @@
     if (!best) best = mapSpawnPoints()[0];
     const now = performance.now();
     b.x = best.x; b.y = best.y; b.a = Math.atan2(state.y - b.y, state.x - b.x);
-    b.hp = b.mh; b.alive = true; b.respawnAt = 0; b.inv = now + 1500; b.nextShot = now + 1500 + Math.random() * 800;
+    if (!state.tr.botTank) b.tank = trPickTank();   // MIXED: new tank every respawn
+    b.path = null; b.hp = b.mh; b.alive = true; b.respawnAt = 0; b.inv = now + 1500; b.nextShot = now + 1500 + Math.random() * 800;
     botSync();
   }
   function trUpdateBar(){
@@ -4588,6 +4688,8 @@
     byId('trTankBtn').textContent = 'TANK: ' + (state.adminTank ? tankLabelOf(state.adminTank) : 'AUTO');
     byId('trBotCount').textContent = state.bots.length + (state.bots.length === 1 ? ' BOT' : ' BOTS');
     byId('trModeBtn').textContent = 'BOTS: ' + (state.tr.dummy ? 'DUMMY' : 'FIGHT');
+    byId('trBotTankBtn').textContent = 'BOT TANK: ' + (state.tr.botTank ? tankLabelOf(state.tr.botTank) : 'MIXED');
+    byId('trLevelBtn').textContent = 'LEVEL: ' + TR_LEVELS[state.tr.level].name;
   }
   function trSetBotCount(delta){
     if (!state.tr) return;
@@ -4613,6 +4715,14 @@
   }
   byId('trBotMinus').addEventListener('click', ()=>trSetBotCount(-1));
   byId('trBotPlus').addEventListener('click', ()=>trSetBotCount(1));
+  byId('trLevelBtn').addEventListener('click', ()=>{ if (!state.tr) return; state.tr.level = (state.tr.level + 1) % TR_LEVELS.length; trUpdateBar(); showToast('BOT LEVEL: ' + TR_LEVELS[state.tr.level].name); });
+  byId('trBotTankBtn').addEventListener('click', ()=>{
+    if (!isTraining()) return;
+    trPicking = 'bots'; adminPickedTank = state.tr.botTank;
+    buildAdminGrid(); showAdminTankStep();
+    byId('adminPanelTitle').textContent = 'TRAINING \u2014 CHOOSE BOT TANK';
+    byId('adminBackdrop').classList.add('show');
+  });
   byId('trModeBtn').addEventListener('click', ()=>{ if (!state.tr) return; state.tr.dummy = !state.tr.dummy; trUpdateBar(); });
   byId('trResetBtn').addEventListener('click', ()=>{
     if (!state.tr) return;
@@ -4624,7 +4734,7 @@
   });
   byId('trTankBtn').addEventListener('click', ()=>{
     if (!isTraining()) return;
-    adminPickedTank = state.adminTank;
+    trPicking = 'me'; adminPickedTank = state.adminTank;
     buildAdminGrid();
     showAdminTankStep();
     byId('adminPanelTitle').textContent = 'TRAINING — CHOOSE TANK';
@@ -6092,7 +6202,7 @@
       grid.appendChild(b);
     };
     ADMIN_TANKS.forEach(([id,label])=>mk(id, label));
-    mk(null, 'AUTO (BY KILLS)', 'auto');
+    mk(null, isTraining() && trPicking === 'bots' ? 'MIXED (RANDOM)' : 'AUTO (BY KILLS)', 'auto');
     refreshAdminGrid();
   }
   function refreshAdminGrid(){
@@ -6117,7 +6227,15 @@
   }
   function selectAdminTank(id){
     adminPickedTank = id || null;
-    if (isTraining()){ setAdminTank(id); closeAdmin(); return; }   // Room 3: pick for yourself, no player step
+    if (isTraining()){
+      if (trPicking === 'bots'){
+        state.tr.botTank = id || null;
+        state.bots.forEach(b => { b.tank = trPickTank(); });
+        botSync(); trUpdateBar(); closeAdmin();
+        showToast('BOT TANK: ' + (id ? tankLabelOf(id) : 'MIXED'));
+      } else { setAdminTank(id); closeAdmin(); }
+      return;
+    }   // Room 3: pick for yourself, no player step
     refreshAdminGrid();
     showAdminPlayerStep();
   }
