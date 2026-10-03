@@ -164,6 +164,25 @@ function sanitizePresence(d) {
   }
   if ('team' in d && d.team !== null && !KNOWN_TEAMS.has(d.team)) delete d.team;
   if ('carrying' in d && d.carrying !== null && !KNOWN_TEAMS.has(d.carrying)) delete d.carrying;
+  // bots simulated by a room host (Showdown fill-ins, host-added FFA / TEAMS bots, training range).
+  // Clamp the list so a bad client can't broadcast an oversized or malformed bot array.
+  if ('bots' in d && d.bots !== null) {
+    if (!Array.isArray(d.bots)) delete d.bots;
+    else {
+      const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : undefined;
+      d.bots = d.bots.slice(0, 20).filter(b => b && typeof b === 'object').map(b => ({
+        n: Math.max(0, Math.min(99999, parseInt(b.n, 10) || 0)),
+        name: String(b.name || 'BOT').slice(0, 12),
+        team: KNOWN_TEAMS.has(b.team) ? b.team : null,
+        color: (typeof b.color === 'string' && /^[a-z]{3,8}$/.test(b.color)) ? b.color : undefined,
+        x: num(b.x), y: num(b.y), a: num(b.a) || 0,
+        hp: num(b.hp) || 0, mh: num(b.mh) || 0,
+        alive: b.alive !== false,
+        lvl: (Number.isInteger(b.lvl) && b.lvl >= 0 && b.lvl <= 3) ? b.lvl : undefined,   // difficulty: 0 EASY .. 3 INSANE
+        score: Math.max(0, Math.min(9999, parseInt(b.score, 10) || 0)),
+      }));
+    }
+  }
   return d;
 }
 

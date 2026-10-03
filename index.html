@@ -203,6 +203,13 @@
   .wait-row { display:flex; align-items:center; gap:8px; padding:6px 9px; font-size:12px; border:1px solid var(--line-bright); border-radius:var(--radius); background:rgba(var(--panel-rgb),0.6); }
   .wait-row .pip { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
   .wait-row .host-tag { margin-left:auto; font-size:10px; color:var(--green); letter-spacing:0.06em; }
+  .wait-row .bot-tag { font-size:10px; color:var(--ink-dim); letter-spacing:0.06em; }
+  .wait-row .wait-mini { margin-left:auto; display:flex; gap:6px; }
+  .wait-row .wait-mini button { font-family:inherit; font-size:10px; letter-spacing:0.06em; padding:3px 7px; background:transparent; color:var(--ink-dim); border:1px solid var(--line-bright); border-radius:var(--radius); cursor:pointer; }
+  .wait-row .wait-mini button:hover { border-color:var(--green); color:var(--green); }
+  .wait-botbar { display:none; gap:8px; margin-top:10px; }
+  .wait-botbar .btn-ghost { flex:1; font-size:11px; padding:8px 6px; }
+  .wait-botbar .btn-ghost:disabled { opacity:.4; cursor:not-allowed; }
   .wait-status { font-size:12px; color:var(--ink-dim); margin-top:14px; text-align:center; }
   .admin-back-btn { background:none; border:none; color:var(--green); font-family:var(--mono); font-size:11px; letter-spacing:0.06em; padding:0 0 12px; cursor:pointer; }
   .admin-back-btn:hover { text-decoration:underline; }
@@ -746,6 +753,10 @@
     </div>
     <div class="wait-count" id="waitCount"></div>
     <div class="wait-list" id="waitList"></div>
+    <div class="wait-botbar" id="waitBotBar">
+      <button type="button" class="btn-ghost" id="waitAddBotBtn">+ ADD BOT</button>
+      <button type="button" class="btn-ghost" id="waitBotLvlBtn">NEW BOT: NORMAL</button>
+    </div>
     <div class="wait-status" id="waitStatus"></div>
     <button class="btn-primary" id="waitStartBtn" style="width:100%;margin-top:16px;display:none;">START MATCH</button>
   </div>
@@ -2231,8 +2242,9 @@
       if ((!Array.isArray(bs) && !trainMine) || !rid) return;
       const src = (trainMine || (p.isMe && state.bots && state.bots.length)) ? state.bots : bs;   // the host reads its own live copy
       src.forEach(b=>extra.push({ peer: 'bot-' + p.peer + '-' + b.n, isMe: false, isBot: true, host: p.peer, presence: {
-        roomId: rid, name: b.name, color: b.team || 'red', team: b.team, x: b.x, y: b.y, turretAngle: b.a,
-        hp: b.hp, maxHp: b.mh, alive: b.alive !== false, score: 0, streak: 0, adminTank: b.tank || null, joinedAt: 1e15 + b.n } }));
+        roomId: rid, name: b.name, color: b.color || b.team || 'red', team: b.team || null, x: b.x, y: b.y, turretAngle: b.a,
+        hp: b.hp, maxHp: b.mh, alive: b.alive !== false, score: b.score || 0, streak: 0, adminTank: b.tank || null, joinedAt: 1e15 + b.n,
+        botLvl: b.lvl } }));
     });
     extra.forEach(e=>list.push(e));
   }
@@ -2637,6 +2649,7 @@
       }
       state.x = sp.x; state.y = sp.y;
       state.room.presence({ x: state.x, y: state.y });
+      if (state.bots.some(b => b.hosted)) hbPlaceAll();   // host-added bots spawn now that the match is live
       if (isTraining()) trInit();
     }
     requestAnimationFrame(loop);
@@ -2675,7 +2688,24 @@
       const label = document.createElement('span');
       label.textContent = (p.presence.name || 'OPERATOR') + (p.isMe ? ' (you)' : '') + (meta && meta.teams && p.presence.team ? ' \u00b7 ' + p.presence.team.toUpperCase() : '');
       row.appendChild(label);
-      if (i === 0){
+      if (p.isBot){
+        const lv = TR_LEVELS[p.presence.botLvl];
+        const tag = document.createElement('span');
+        tag.className = 'bot-tag';
+        tag.textContent = 'BOT' + (lv ? ' \u00b7 ' + lv.name : '') + (meta && meta.mode === 'teams' && p.presence.team ? ' \u00b7 ' + p.presence.team.toUpperCase() : '');
+        row.appendChild(tag);
+        const mine = iAmHost && p.host === state.myPeerId ? state.bots.find(x => botId(x) === p.peer) : null;
+        if (mine){
+          const ctl = document.createElement('span'); ctl.className = 'wait-mini';
+          const lvBtn = document.createElement('button'); lvBtn.type = 'button'; lvBtn.textContent = 'LEVEL';
+          lvBtn.title = 'Change this bot\u2019s difficulty';
+          lvBtn.addEventListener('click', () => hbSetLevel(mine.n, ((mine.lvl || 0) + 1) % TR_LEVELS.length));
+          const xBtn = document.createElement('button'); xBtn.type = 'button'; xBtn.textContent = '\u2715'; xBtn.setAttribute('aria-label', 'Remove bot');
+          xBtn.addEventListener('click', () => hbRemove(mine.n));
+          ctl.appendChild(lvBtn); ctl.appendChild(xBtn); row.appendChild(ctl);
+        }
+      }
+      if (i === 0 && !p.isBot){
         const tag = document.createElement('span');
         tag.className = 'host-tag'; tag.textContent = 'HOST';
         row.appendChild(tag);
@@ -2683,6 +2713,13 @@
       box.appendChild(row);
     });
 
+    const botBar = byId('waitBotBar');
+    const canBots = iAmHost && hbAllowed(meta);
+    botBar.style.display = canBots ? 'flex' : 'none';
+    if (canBots){
+      byId('waitAddBotBtn').disabled = list.length >= (meta ? meta.cap : 4);
+      byId('waitBotLvlBtn').textContent = 'NEW BOT: ' + TR_LEVELS[hbNextLvl].name;
+    }
     const startBtn = byId('waitStartBtn');
     const statusEl = byId('waitStatus');
     const sdRoom = !!(meta && meta.mode === 'showdown');
@@ -2718,7 +2755,7 @@
   byId('waitStartBtn').addEventListener('click', ()=>{
     if (!state.waitingToStart || !state.currentSector) return;
     const meta = getRoomMeta(state.currentSector) || normMeta(null);
-    state.bots = [];
+    if (meta.mode === 'showdown') state.bots = [];   // Showdown fills seats itself; FFA / TEAMS keep the bots the host added
     if (meta.mode === 'showdown'){
       const humans = peersIn(state.currentSector).filter(p => !p.isBot).sort((a, b) => (a.presence.joinedAt || 0) - (b.presence.joinedAt || 0));
       const prob = sdCountProblem(humans.length, meta); if (prob){ showToast(prob); return; }
@@ -2817,6 +2854,9 @@
     spawnSpark(d.x, d.y, '#e3a857', 1);
     if (d.shooterId === state.myPeerId){
       creditKills(1, false);
+    } else if (isMyBotId(d.shooterId)){
+      const kb = state.bots.find(x => botId(x) === d.shooterId);
+      if (kb){ kb.score = (kb.score || 0) + 1; botSync(); }   // host-added bots keep a kill score like players
     }
     renderScoreStrip();
   }
@@ -4372,13 +4412,19 @@
     { name: 'HARD',   SPEED: 255, FIRE_MS: 620,  DMG: 20, ERR: 0.06, SEE: 900, KEEP_MIN: 180, KEEP_MAX: 360, TURN: 9 },
     { name: 'INSANE', SPEED: 300, FIRE_MS: 380,  DMG: 28, ERR: 0.015, SEE: 1200, KEEP_MIN: 160, KEEP_MAX: 320, TURN: 14 },
   ];
-  function botCfg(){ return isTraining() && state.tr ? TR_LEVELS[state.tr.level] : BOT; }
+  // Room 3 uses the room-wide level; host-added bots in hosted rooms each carry their own level (b.lvl)
+  function botCfg(b){
+    if (isTraining() && state.tr) return TR_LEVELS[state.tr.level];
+    if (b && b.lvl !== undefined && TR_LEVELS[b.lvl]) return TR_LEVELS[b.lvl];
+    return BOT;
+  }
   function botId(b){ return 'bot-' + state.myPeerId + '-' + b.n; }
   function isMyBotId(id){ return typeof id === 'string' && !!state.myPeerId && id.indexOf('bot-' + state.myPeerId + '-') === 0; }
   function botSlim(b){
     const r = Math.round;
     return { n: b.n, name: b.name, team: b.team, x: b.x === undefined ? undefined : r(b.x), y: b.y === undefined ? undefined : r(b.y),
-             a: r((b.a || 0) * 100) / 100, hp: r(b.hp), mh: b.mh, alive: b.alive };
+             a: r((b.a || 0) * 100) / 100, hp: r(b.hp), mh: b.mh, alive: b.alive,
+             color: b.color || undefined, lvl: b.lvl, score: b.score || 0 };
   }
   function botSync(){
     if (isTraining()){ if (state.room) state.room.refreshBots(); return; }   // Room 3: purely local, no network
@@ -4478,13 +4524,13 @@
   }
 
   function botFire(b){
-    const C = botCfg();
+    const C = botCfg(b);
     const def = b.tank && LOADOUTS[b.tank];
     const tune = def || {};
     const spd = BULLET_SPEED * (tune.speedMul || 1);
     const dmg = C.DMG * (tune.dmgMul || 1);
     const aim = b.a + (Math.random() - 0.5) * 2 * C.ERR;
-    const color = colorHex(b.team);
+    const color = colorHex(b.color || b.team);
     let shots = [];
     const stamp = botId(b) + '-' + Math.floor(performance.now());
     if (!def || isDroneTank(b.tank) || def.burst){
@@ -4513,7 +4559,7 @@
       spawnBullet(sh.id, botId(b), b.name, sh.x, sh.y, sh.angle, color, spd, dmg, b.tank === 'necro', b.team, 0, sh.r, b.tank === 'firework');
     });
     state.room.emit('shoot', { shots, shooterId: botId(b), shooterName: b.name,
-      color: b.team, team: b.team, roomId: state.currentSector, speed: spd, damage: dmg, square: false, pierce: 0 });
+      color: b.color || b.team, team: b.team, roomId: state.currentSector, speed: spd, damage: dmg, square: false, pierce: 0 });
   }
 
   function botHit(peerId, bulletId, shooterId, shooterName, dmg){
@@ -4534,13 +4580,13 @@
     b.hp = Math.max(0, b.hp - dmg);
     if (b.hp > 0) return;
     b.alive = false;
-    if (isTraining()) b.respawnAt = now + 2500;
+    if (isTraining() || b.hosted) b.respawnAt = now + (b.hosted ? 3000 : 2500);   // training + host-added bots come back on their own
     const ev = { shooterId: shooterId || null, shooterName: shooterName || 'THE SMOKE', victimId: botId(b), victimName: b.name, x: b.x, y: b.y, roomId: state.currentSector };
     state.room.emit('kill', ev);
     onKillEvent(ev);                                        // the server never echoes my own emits back
     const mateUp = state.bots.some(o => o !== b && o.team === b.team && o.alive) ||
       peersIn(state.currentSector).some(p => !p.isBot && (p.isMe ? state.team : p.presence.team) === b.team && (p.isMe ? state.alive : p.presence.alive !== false));
-    if (!isTraining()) b.respawnAt = mateUp ? now + SD.TEAM_RESPAWN_MS : 0;   // same rule as players: back after 10s if a teammate lives
+    if (!isTraining() && !b.hosted) b.respawnAt = mateUp ? now + SD.TEAM_RESPAWN_MS : 0;   // same rule as players: back after 10s if a teammate lives
     botSync();
   }
 
@@ -4559,8 +4605,8 @@
 
   // per frame, host only
   function botsUpdate(dt){
-    const sd = state.sd || state.tr;
-    if (!sd || !state.currentSector || !state.bots.length) return;
+    const sd = state.sd || state.tr || HB_IDLE;   // host-added bots (FFA / TEAMS) have no Showdown / training state
+    if (!state.currentSector || !state.bots.length) return;
     const now = performance.now();
     const tanks = [];
     peersIn(state.currentSector).forEach(p => {
@@ -4571,11 +4617,11 @@
     });
     state.bots.forEach(b => { if (b.x !== undefined) tanks.push({ id: botId(b), team: b.team, x: b.x, y: b.y, alive: b.alive, bot: b }); });
     let dirty = false;
-    const C = botCfg();
     for (const b of state.bots){
       if (b.x === undefined) continue;
+      const C = botCfg(b);
       if (!b.alive){
-        if (isTraining()){ if (b.respawnAt && now >= b.respawnAt){ trPlaceBot(b); dirty = true; } continue; }
+        if (isTraining() || b.hosted){ if (b.respawnAt && now >= b.respawnAt){ if (b.hosted) hbPlace(b); else trPlaceBot(b); dirty = true; } continue; }
         if (!sd.over && b.respawnAt){
           if (!tanks.some(t => t.alive && t.team === b.team && t.bot !== b)) b.respawnAt = 0;
           else if (now >= b.respawnAt){ botRespawn(b, tanks); dirty = true; }
@@ -4587,7 +4633,7 @@
       // nearest living enemy
       let tgt = null, td = 1e9;
       for (const t of tanks){
-        if (!t.alive || t.team === b.team || t.bot === b) continue;
+        if (!t.alive || (b.team && t.team === b.team) || t.bot === b) continue;   // team-less (FFA) bots treat everyone as an enemy
         const d = Math.hypot(t.x - b.x, t.y - b.y);
         if (d < td){ td = d; tgt = t; }
       }
@@ -4641,6 +4687,85 @@
     }
     if (dirty || now - state.botSyncAt > 60){ state.botSyncAt = now; botSync(); }
   }
+
+  // ---------------------------------------------------------------
+  // HOST-ADDED BOTS -- in a hosted FFA / TEAMS room the host can add bots from the waiting
+  // room and pick each bot's difficulty (EASY / NORMAL / HARD / INSANE, the same presets as the
+  // training range). Bots count toward the room cap. The host's client simulates them (same code
+  // path as Showdown / training bots) and publishes them in presence.bots, so everyone sees them.
+  // CTF and Showdown are not offered: CTF bots would need flag logic, Showdown fills seats itself.
+  // ---------------------------------------------------------------
+  const HB_IDLE = { over: false };
+  let hbNextLvl = 1;     // difficulty given to the next bot added (NORMAL by default)
+  let hbNextN = 0;       // monotonic bot index, so ids are never reused after a removal
+  function hbAllowed(meta){ return !!meta && (meta.mode === 'ffa' || meta.mode === 'teams'); }
+  function hbCanEdit(){
+    const sector = state.currentSector;
+    return !!sector && state.waitingToStart && isRoomHost(sector) && hbAllowed(getRoomMeta(sector));
+  }
+  function hbFreeName(){
+    const used = new Set(state.bots.map(b => b.name));
+    for (let i = 1; i < 100; i++) if (!used.has('BOT ' + i)) return 'BOT ' + i;
+    return 'BOT';
+  }
+  function hbAddBot(lvl){
+    if (!hbCanEdit()) return;
+    const sector = state.currentSector, meta = getRoomMeta(sector);
+    if (peersIn(sector).length >= meta.cap){ showToast('Room is full \u2014 no space for another bot.'); return; }
+    let team = null, color;
+    if (meta.mode === 'teams'){
+      const counts = { red: 0, blue: 0 };
+      peersIn(sector).forEach(p => { if (counts[p.presence.team] !== undefined) counts[p.presence.team]++; });
+      team = counts.red <= counts.blue ? 'red' : 'blue';
+      color = team;
+    } else {
+      const used = new Set(peersIn(sector).map(p => p.presence.color));
+      const free = PALETTE.find(c => !used.has(c.id));
+      color = (free || PALETTE[hbNextN % PALETTE.length]).id;
+    }
+    const b = { n: 1000 + hbNextN++, name: hbFreeName(), team, color, lvl, hosted: true, tank: null, score: 0,
+      hp: MAX_HP, mh: MAX_HP, alive: true, poisonAcc: 0, dir: Math.random() < 0.5 ? 1 : -1, flipAt: 0, wander: 0, wanderA: 0, stuck: 0 };
+    state.bots.push(b);
+    botSync(); renderWaitPanel();
+  }
+  function hbRemove(n){
+    if (!hbCanEdit()) return;
+    state.bots = state.bots.filter(b => b.n !== n);
+    botSync(); renderWaitPanel();
+  }
+  function hbSetLevel(n, lvl){
+    if (!hbCanEdit() || !TR_LEVELS[lvl]) return;
+    const b = state.bots.find(x => x.n === n); if (!b) return;
+    b.lvl = lvl;
+    botSync(); renderWaitPanel();
+  }
+  // put a bot on a free spot as far as possible from every other tank
+  function hbPlace(b, skipSync){
+    const others = [];
+    peersIn(state.currentSector).forEach(p => {
+      if (p.isBot && p.host === state.myPeerId) return;
+      const x = p.isMe ? state.x : p.presence.x, y = p.isMe ? state.y : p.presence.y;
+      if (x !== undefined && y !== undefined) others.push({ x, y });
+    });
+    state.bots.forEach(o => { if (o !== b && o.x !== undefined && o.alive) others.push({ x: o.x, y: o.y }); });
+    let best = null, bestD = -1;
+    for (let k = 0; k < 80; k++){
+      const x = 80 + Math.random() * (ARENA_W - 160), y = 80 + Math.random() * (ARENA_H - 160);
+      if (!canOccupy(x, y)) continue;
+      const d = others.reduce((m, o) => Math.min(m, Math.hypot(o.x - x, o.y - y)), 1e9);
+      if (d > bestD){ best = { x, y }; bestD = d; }
+      if (d > 700) break;
+    }
+    if (!best){ const sp = mapSpawnPoints(); best = sp[Math.floor(Math.random() * sp.length)]; }
+    const now = performance.now();
+    b.x = best.x; b.y = best.y; b.a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x);
+    b.path = null; b.hp = b.mh; b.alive = true; b.respawnAt = 0; b.inv = now + 2500; b.nextShot = now + 1500 + Math.random() * 800;
+    b.stuck = 0; b.wander = 0;
+    if (!skipSync) botSync();
+  }
+  function hbPlaceAll(){ state.bots.forEach(b => { if (b.hosted) hbPlace(b, true); }); botSync(); }
+  byId('waitAddBotBtn').addEventListener('click', () => hbAddBot(hbNextLvl));
+  byId('waitBotLvlBtn').addEventListener('click', () => { hbNextLvl = (hbNextLvl + 1) % TR_LEVELS.length; renderWaitPanel(); });
 
   // ---------------------------------------------------------------
   // ROOM 3 -- TRAINING RANGE. Private: only you and your own bots exist here (no other player can
