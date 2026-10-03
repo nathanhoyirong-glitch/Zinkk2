@@ -2536,7 +2536,7 @@
     const mode = meta ? meta.mode : 'ffa';
     const teamMode = mode === 'teams' || mode === 'ctf' || (mode === 'showdown' && !!(meta && meta.teams));
     if (meta && meta.mode === 'showdown' && meta.started){ showToast('That Showdown is already underway.'); return; }
-    const count = peersIn(sector).length;
+    const count = peersIn(sector).filter(p => !p.isBot).length;   // bots don't count as players
     if (count >= (meta ? meta.cap : capOf(sector))){ showToast(roomLabel(sector) + ' is full.'); return; }
 
     let color = state.chosenColor;
@@ -2675,7 +2675,8 @@
     const iAmHost = isRoomHost(sector);
 
     byId('waitRoomName').textContent = meta ? meta.name : 'WAITING ROOM';
-    byId('waitCount').textContent = list.length + ' / ' + (meta ? meta.cap : 4) + ' joined \u2014 waiting to start';
+    const humanCount = list.filter(p => !p.isBot).length, botCount = list.length - humanCount;
+    byId('waitCount').textContent = humanCount + ' / ' + (meta ? meta.cap : 4) + ' joined' + (botCount ? ' + ' + botCount + ' bot' + (botCount > 1 ? 's' : '') : '') + ' \u2014 waiting to start';
 
     const box = byId('waitList');
     box.innerHTML = '';
@@ -2717,7 +2718,7 @@
     const canBots = iAmHost && hbAllowed(meta);
     botBar.style.display = canBots ? 'flex' : 'none';
     if (canBots){
-      byId('waitAddBotBtn').disabled = list.length >= (meta ? meta.cap : 4);
+      byId('waitAddBotBtn').disabled = botCount >= HB_MAX_BOTS;
       byId('waitBotLvlBtn').textContent = 'NEW BOT: ' + TR_LEVELS[hbNextLvl].name;
     }
     const startBtn = byId('waitStartBtn');
@@ -2728,9 +2729,9 @@
     const nBots = sdRoom ? sdBotsNeeded(list.length, meta) : 0;
     const oddMsg = sdProblem;
     if (iAmHost){
-      if (list.length < MIN_HOST_START_PLAYERS){
+      if (humanCount < MIN_HOST_START_PLAYERS && !botCount){   // bots aren't players, but a host with bots can start alone
         startBtn.style.display = 'none';
-        statusEl.textContent = 'Need at least ' + MIN_HOST_START_PLAYERS + ' players to start.';
+        statusEl.textContent = 'Need at least ' + MIN_HOST_START_PLAYERS + ' players (or add a bot) to start.';
       } else if (sdOdd){
         startBtn.style.display = 'none';
         statusEl.textContent = oddMsg;
@@ -2856,7 +2857,7 @@
       creditKills(1, false);
     } else if (isMyBotId(d.shooterId)){
       const kb = state.bots.find(x => botId(x) === d.shooterId);
-      if (kb){ kb.score = (kb.score || 0) + 1; botSync(); }   // host-added bots keep a kill score like players
+      if (kb){ kb.score = (kb.score || 0) + 1; if (kb.hosted) hbProgress(kb); botSync(); }   // host-added bots keep a kill score and level up like players
     }
     renderScoreStrip();
   }
@@ -4527,8 +4528,10 @@
     const C = botCfg(b);
     const def = b.tank && LOADOUTS[b.tank];
     const tune = def || {};
-    const spd = BULLET_SPEED * (tune.speedMul || 1);
-    const dmg = C.DMG * (tune.dmgMul || 1);
+    const up = b.up || null;
+    const spd = BULLET_SPEED * (tune.speedMul || 1) * (up ? 1 + up.bulletspeed * 0.045 : 1);
+    const dmg = (C.DMG + (up ? up.bulletdmg * 1.5 : 0)) * (tune.dmgMul || 1);
+    const pierce = up ? Math.floor(up.penetration / 2) : 0;
     const aim = b.a + (Math.random() - 0.5) * 2 * C.ERR;
     const color = colorHex(b.color || b.team);
     let shots = [];
@@ -4556,10 +4559,10 @@
     if (!shots.length) return;
     shots.forEach((sh, i) => {
       sh.id = stamp + '-' + i + '-' + Math.floor(Math.random() * 1000);
-      spawnBullet(sh.id, botId(b), b.name, sh.x, sh.y, sh.angle, color, spd, dmg, b.tank === 'necro', b.team, 0, sh.r, b.tank === 'firework');
+      spawnBullet(sh.id, botId(b), b.name, sh.x, sh.y, sh.angle, color, spd, dmg, b.tank === 'necro', b.team, pierce, sh.r, b.tank === 'firework');
     });
     state.room.emit('shoot', { shots, shooterId: botId(b), shooterName: b.name,
-      color: b.color || b.team, team: b.team, roomId: state.currentSector, speed: spd, damage: dmg, square: false, pierce: 0 });
+      color: b.color || b.team, team: b.team, roomId: state.currentSector, speed: spd, damage: dmg, square: false, pierce });
   }
 
   function botHit(peerId, bulletId, shooterId, shooterName, dmg){
@@ -4661,7 +4664,8 @@
       }
       const len = Math.hypot(mx, my);
       if (len > 0.01){
-        const nx = b.x + mx / len * C.SPEED * dt, ny = b.y + my / len * C.SPEED * dt;
+        const spdMul = b.up ? 1 + b.up.movespeed * 0.035 : 1;
+        const nx = b.x + mx / len * C.SPEED * spdMul * dt, ny = b.y + my / len * C.SPEED * spdMul * dt;
         let moved = false;
         if (canOccupy(nx, b.y)){ b.x = nx; moved = true; }
         if (canOccupy(b.x, ny)){ b.y = ny; moved = true; }
@@ -4675,10 +4679,11 @@
         let da = want - b.a; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
         b.a += Math.max(-C.TURN * dt, Math.min(C.TURN * dt, da));
         if (Math.abs(da) < 0.25 && now >= b.nextShot && botLOS(b.x, b.y, tgt.x, tgt.y)){
-          b.nextShot = now + C.FIRE_MS * ((b.tank && LOADOUTS[b.tank] && LOADOUTS[b.tank].fireMul) || 1) * (0.9 + Math.random() * 0.4);
+          b.nextShot = now + C.FIRE_MS * (b.up ? Math.pow(0.965, b.up.reload) : 1) * ((b.tank && LOADOUTS[b.tank] && LOADOUTS[b.tank].fireMul) || 1) * (0.9 + Math.random() * 0.4);
           botFire(b);
         }
       } else if (len > 0.01) b.a = Math.atan2(my, mx);
+      if (b.up && b.up.regen && b.hp < b.mh){ b.hp = Math.min(b.mh, b.hp + b.up.regen * 0.6 * dt); dirty = true; }   // upgraded health regen
       // poison smoke hurts bots too
       if (inSmoke){
         b.poisonAcc += dt * 1000;
@@ -4696,8 +4701,45 @@
   // CTF and Showdown are not offered: CTF bots would need flag logic, Showdown fills seats itself.
   // ---------------------------------------------------------------
   const HB_IDLE = { over: false };
+  const HB_MAX_BOTS = 8;   // bots don't use player slots, so they get their own limit
   let hbNextLvl = 1;     // difficulty given to the next bot added (NORMAL by default)
   let hbNextN = 0;       // monotonic bot index, so ids are never reused after a removal
+  // ---- bot upgrades: same rules as players (1 point per kill, 7 levels per stat, tank tiers at 1 / 7 / 14 kills) ----
+  function hbFreshUp(){ return { regen: 0, maxhp: 0, bodydmg: 0, bulletspeed: 0, penetration: 0, bulletdmg: 0, reload: 0, movespeed: 0 }; }
+  // what a bot of each difficulty likes to buy (weights): harder bots favour damage / reload / speed
+  const HB_STAT_WEIGHTS = [
+    { regen: 1, maxhp: 2, bodydmg: 0, bulletspeed: 1, penetration: 1, bulletdmg: 2, reload: 2, movespeed: 1 },   // EASY
+    { regen: 1, maxhp: 2, bodydmg: 0, bulletspeed: 2, penetration: 1, bulletdmg: 3, reload: 3, movespeed: 2 },   // NORMAL
+    { regen: 1, maxhp: 2, bodydmg: 0, bulletspeed: 2, penetration: 2, bulletdmg: 4, reload: 4, movespeed: 3 },   // HARD
+    { regen: 2, maxhp: 3, bodydmg: 0, bulletspeed: 3, penetration: 2, bulletdmg: 5, reload: 5, movespeed: 4 },   // INSANE
+  ];
+  function hbSpendPoint(b){
+    const w = HB_STAT_WEIGHTS[b.lvl] || HB_STAT_WEIGHTS[1];
+    const opts = Object.keys(b.up).filter(k => b.up[k] < STAT_MAX && w[k] > 0);
+    if (!opts.length) return false;
+    let r = Math.random() * opts.reduce((t, k) => t + w[k], 0), pick = opts[opts.length - 1];
+    for (const k of opts){ r -= w[k]; if (r <= 0){ pick = k; break; } }
+    b.up[pick]++;
+    if (pick === 'maxhp'){ b.mh = MAX_HP + b.up.maxhp * 7.5; b.hp = Math.min(b.mh, b.hp + 7.5); }
+    return true;
+  }
+  const hbPickOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  // called on every kill: bank the point, spend it, take the tier picks a player would be offered, refresh the tank
+  function hbProgress(b){
+    b.pts = (b.pts || 0) + 1;
+    while (b.pts > 0 && hbSpendPoint(b)) b.pts--;
+    if (b.score >= FIRST_PICK_KILLS && !b.l1) b.l1 = hbPickOf(TIER1_TANKS_LIST);
+    if (b.score >= LOADOUT7_KILLS && !b.l7){
+      b.l7 = hbPickOf(b.l1 === 'machinegun' ? ['gunner', 'destroyer'] : b.l1 === 'sniper' ? ['overseer', 'hunter'] : ['triple', 'quad', 'parallel']);
+    }
+    if (b.score >= PREDATOR_KILLS && !b.l20){
+      const o = { destroyer: ['firework', 'behemoth'], parallel: ['quintet', 'octo'], hunter: ['predator', 'quintet'], gunner: ['autogunner', 'autotriplet'], overseer: ['overlord'] }[b.l7] || ['triplet', 'quadtwin'];
+      b.l20 = hbPickOf(o);
+    }
+    const t = resolveLoadout(b.score, b.l7, null, b.l20, null, b.l1);
+    b.tank = t === 'single' ? null : t;   // null = plain starter tank
+  }
+  const TIER1_TANKS_LIST = ['twin', 'machinegun', 'sniper'];
   function hbAllowed(meta){ return !!meta && (meta.mode === 'ffa' || meta.mode === 'teams'); }
   function hbCanEdit(){
     const sector = state.currentSector;
@@ -4711,7 +4753,7 @@
   function hbAddBot(lvl){
     if (!hbCanEdit()) return;
     const sector = state.currentSector, meta = getRoomMeta(sector);
-    if (peersIn(sector).length >= meta.cap){ showToast('Room is full \u2014 no space for another bot.'); return; }
+    if (state.bots.length >= HB_MAX_BOTS){ showToast('Max ' + HB_MAX_BOTS + ' bots per room.'); return; }
     let team = null, color;
     if (meta.mode === 'teams'){
       const counts = { red: 0, blue: 0 };
@@ -4723,7 +4765,7 @@
       const free = PALETTE.find(c => !used.has(c.id));
       color = (free || PALETTE[hbNextN % PALETTE.length]).id;
     }
-    const b = { n: 1000 + hbNextN++, name: hbFreeName(), team, color, lvl, hosted: true, tank: null, score: 0,
+    const b = { n: 1000 + hbNextN++, name: hbFreeName(), team, color, lvl, hosted: true, tank: null, score: 0, pts: 0, up: hbFreshUp(), l1: null, l7: null, l20: null,
       hp: MAX_HP, mh: MAX_HP, alive: true, poisonAcc: 0, dir: Math.random() < 0.5 ? 1 : -1, flipAt: 0, wander: 0, wanderA: 0, stuck: 0 };
     state.bots.push(b);
     botSync(); renderWaitPanel();
@@ -6116,7 +6158,7 @@
     state.room.peers().forEach(p=>{ const id = p.presence && p.presence.roomId; if (isCustomRoom(id)) ids.add(id); });
     return Array.from(ids).map(id=>({
       id, meta: getRoomMeta(id),
-      list: peersIn(id).slice().sort((a,b)=>(a.presence.joinedAt||0)-(b.presence.joinedAt||0)),
+      list: peersIn(id).filter(p=>!p.isBot).sort((a,b)=>(a.presence.joinedAt||0)-(b.presence.joinedAt||0)),   // bots never take a player slot
     })).filter(r=>r.list.length).sort((a,b)=>a.meta.name.localeCompare(b.meta.name));
   }
   function newRoomId(){
