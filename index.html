@@ -4479,16 +4479,34 @@
   }
 
   // coarse walkable grid + BFS so bots route around walls (cached per map)
-  const BP_CELL = 40;
+  // Cell size adapts to the map: tight mazes (LOST ENDS, the round mazes) only leave ~24px of clearance for a
+  // tank inside a corridor, so a 40px grid steps right over them and marks whole corridors as solid.
+  let BP_CELL = 40;
   let bpGrid = null;
   function bpBuild(){
-    const key = ACTIVE_MAP + ':' + ARENA_W + 'x' + ARENA_H;
-    if (bpGrid && bpGrid.key === key) return bpGrid;
-    const cols = Math.ceil(ARENA_W / BP_CELL), rows = Math.ceil(ARENA_H / BP_CELL), ok = new Uint8Array(cols * rows);
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) ok[r * cols + c] = canOccupy((c + 0.5) * BP_CELL, (r + 0.5) * BP_CELL) ? 1 : 0;
-    return (bpGrid = { key, cols, rows, ok });
+    const m = MAPS[ACTIVE_MAP] || {};
+    const cell = (m.tight || m.curved || m.fine || ARENA_W > 1500) ? 15 : 20;
+    const key = ACTIVE_MAP + ':' + ARENA_W + 'x' + ARENA_H + ':' + cell;
+    if (bpGrid && bpGrid.key === key){ BP_CELL = cell; return bpGrid; }
+    BP_CELL = cell;
+    const cols = Math.ceil(ARENA_W / cell), rows = Math.ceil(ARENA_H / cell), ok = new Uint8Array(cols * rows);
+    // start from "walkable inside the arena border", then knock out only the cells near each wall
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++){
+      const x = (c + 0.5) * cell, y = (r + 0.5) * cell;
+      ok[r * cols + c] = (x >= TANK_R && x <= ARENA_W - TANK_R && y >= TANK_R && y <= ARENA_H - TANK_R) ? 1 : 0;
+    }
+    const pad = TANK_R + cell;
+    for (const o of OBSTACLES){
+      const c0 = Math.max(0, Math.floor((o.x - pad) / cell)), c1 = Math.min(cols - 1, Math.floor((o.x + o.w + pad) / cell));
+      const r0 = Math.max(0, Math.floor((o.y - pad) / cell)), r1 = Math.min(rows - 1, Math.floor((o.y + o.h + pad) / cell));
+      for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++){
+        const i = r * cols + c;
+        if (ok[i] && rectCircleCollide((c + 0.5) * cell, (r + 0.5) * cell, TANK_R, o)) ok[i] = 0;
+      }
+    }
+    return (bpGrid = { key, cols, rows, ok, cell });
   }
-  function bpCell(g, x, y){ return Math.max(0, Math.min(g.rows - 1, Math.floor(y / BP_CELL))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.floor(x / BP_CELL))); }
+  function bpCell(g, x, y){ return Math.max(0, Math.min(g.rows - 1, Math.floor(y / g.cell))) * g.cols + Math.max(0, Math.min(g.cols - 1, Math.floor(x / g.cell))); }
   function bpFind(g, sx, sy, tx, ty){
     const start = bpCell(g, sx, sy);
     let goal = bpCell(g, tx, ty);
@@ -4513,17 +4531,18 @@
     }
     if (reached < 0) reached = bestC;
     const path = [];
-    for (let c = reached; c >= 0 && c !== start; c = prev[c]) path.push({ x: (c % g.cols + 0.5) * BP_CELL, y: (Math.floor(c / g.cols) + 0.5) * BP_CELL });
+    for (let c = reached; c >= 0 && c !== start; c = prev[c]) path.push({ x: (c % g.cols + 0.5) * g.cell, y: (Math.floor(c / g.cols) + 0.5) * g.cell });
     return path.reverse();
   }
   // next waypoint toward the target (re-planned twice a second)
   function botPathStep(b, tgt, now){
-    if (!b.path || now > b.pathAt){ b.path = bpFind(bpBuild(), b.x, b.y, tgt.x, tgt.y); b.pathAt = now + 500; }
-    while (b.path.length && Math.hypot(b.path[0].x - b.x, b.path[0].y - b.y) < BP_CELL * 0.6) b.path.shift();
+    const g = bpBuild();
+    if (!b.path || now > b.pathAt){ b.path = bpFind(g, b.x, b.y, tgt.x, tgt.y); b.pathAt = now + 500 + Math.random() * 150; }
+    while (b.path.length && Math.hypot(b.path[0].x - b.x, b.path[0].y - b.y) < g.cell * 0.7) b.path.shift();
     if (!b.path.length) return null;
-    // look a couple of cells ahead as long as the way is clear, so movement is smooth
+    // look ahead as long as the way is clear, so movement is smooth
     let wp = b.path[0];
-    for (let i = 1; i < Math.min(4, b.path.length); i++){ if (botLOS(b.x, b.y, b.path[i].x, b.path[i].y, TANK_R + 2)) wp = b.path[i]; else break; }
+    for (let i = 1; i < Math.min(6, b.path.length); i++){ if (botLOS(b.x, b.y, b.path[i].x, b.path[i].y, TANK_R + 2)) wp = b.path[i]; else break; }
     return wp;
   }
 
@@ -4671,7 +4690,8 @@
         else if (td < C.KEEP_MIN){ mx = -Math.cos(a); my = -Math.sin(a); }
         else { mx = Math.cos(a) * 0.25; my = Math.sin(a) * 0.25; }                                      // in the sweet spot: circle, don't shuffle
         if (now > b.flipAt){ b.dir = -b.dir; b.flipAt = now + 1500 + Math.random() * 2200; }
-        mx += -Math.sin(a) * b.dir * 0.9; my += Math.cos(a) * b.dir * 0.9;                              // strafe
+        const strafe = (MAPS[ACTIVE_MAP] && (MAPS[ACTIVE_MAP].tight || MAPS[ACTIVE_MAP].curved)) ? 0.15 : 0.9;   // narrow corridors: barely strafe, it just grinds into walls
+        mx += -Math.sin(a) * b.dir * strafe; my += Math.cos(a) * b.dir * strafe;                              // strafe
       } else {
         const a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x); mx = Math.cos(a) * 0.5; my = Math.sin(a) * 0.5;
       }
