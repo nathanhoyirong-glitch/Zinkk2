@@ -638,6 +638,22 @@ app.get('/lobby-music.mp3', (req, res) => {
   res.sendFile(path.join(__dirname, 'lobby-music.mp3'), (err) => { if (err && !res.headersSent) res.status(404).end(); });
 });
 
+// Site icons (Safari/iPad tab icon, Home Screen icon). Looked up next to server.js, then in public/.
+const ICON_FILES = new Set(['favicon.ico', 'favicon-32.png', 'favicon-192.png', 'apple-touch-icon.png', 'apple-touch-icon-precomposed.png']);
+app.get(['/favicon.ico', '/favicon-32.png', '/favicon-192.png', '/apple-touch-icon.png', '/apple-touch-icon-precomposed.png'], (req, res) => {
+  const name = path.basename(req.path);
+  if (!ICON_FILES.has(name)) return res.status(404).end();
+  // precomposed falls back to the normal touch icon
+  const file = name === 'apple-touch-icon-precomposed.png' ? 'apple-touch-icon.png' : name;
+  res.set('Cache-Control', 'public, max-age=86400');
+  const candidates = [path.join(__dirname, file), path.join(__dirname, 'public', file)];
+  const tryNext = (i) => {
+    if (i >= candidates.length) return res.status(404).end();
+    res.sendFile(candidates[i], (err) => { if (err && !res.headersSent) tryNext(i + 1); });
+  };
+  tryNext(0);
+});
+
 app.get('/healthz', (req, res) => res.type('text/plain').send('ok'));
 
 const PORT = process.env.PORT || 3000;
