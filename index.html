@@ -369,6 +369,26 @@
     html[data-ctrl="mobile"] .sd-spec { bottom:calc(min(var(--joy-size), 42vw) + 30px); }
   }
 
+  /* ---------- host timer: scroll wheels ---------- */
+  .tw-wrap { display:flex; gap:12px; justify-content:center; align-items:flex-end; margin-top:4px; }
+  .tw-col { width:92px; }
+  .tw-lab { text-align:center; font-size:10px; letter-spacing:0.12em; color:var(--ink-dim); margin-bottom:5px; }
+  .tw-box { position:relative; height:120px; border:1px solid var(--line-bright); border-radius:var(--radius); background:var(--panel-2); overflow:hidden; }
+  .tw-list { height:100%; overflow-y:scroll; scroll-snap-type:y mandatory; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+    padding:40px 0; scrollbar-width:none; touch-action:pan-y; }
+  .tw-list::-webkit-scrollbar { display:none; }
+  .tw-item { height:40px; line-height:40px; text-align:center; scroll-snap-align:center; font-family:var(--mono); font-size:20px; color:var(--ink-dim); cursor:pointer; user-select:none; -webkit-user-select:none; }
+  .tw-item.sel { color:var(--green); font-weight:700; }
+  .tw-hl { position:absolute; left:0; right:0; top:40px; height:40px; pointer-events:none; border-top:1px solid var(--green); border-bottom:1px solid var(--green); background:rgba(110,227,154,0.08); }
+  .tw-colon { font-size:22px; color:var(--ink-dim); padding-bottom:42px; }
+  .admin-popup { position:fixed; inset:0; z-index:90; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(6,11,8,0.55); pointer-events:auto; }
+  .admin-popup.show { display:flex; animation:adminPopIn .18s ease-out; }
+  @keyframes adminPopIn { from { opacity:0; transform:scale(.96); } to { opacity:1; transform:none; } }
+  .admin-popup-card { width:100%; max-width:340px; padding:20px 20px 18px; border-color:var(--amber); background:var(--panel); }
+  .admin-popup-from { font-size:11px; letter-spacing:0.14em; color:var(--amber); font-weight:700; }
+  .admin-popup-text { margin-top:10px; font-size:16px; line-height:1.45; color:var(--ink); word-break:break-word; white-space:pre-wrap; }
+  .admin-popup-ok { margin-top:16px; padding:11px; min-height:44px; }
+
   .toast {
     position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:50;
     background: var(--panel); border:1px solid var(--amber); color:var(--ink);
@@ -758,6 +778,15 @@
 
 <div class="toast" id="toast"></div>
 
+<div class="admin-popup" id="adminPopup" role="alertdialog" aria-live="assertive">
+  <div class="admin-popup-card bracket">
+    <span class="bl"></span><span class="br"></span>
+    <div class="admin-popup-from" id="adminPopupFrom">ADMIN</div>
+    <div class="admin-popup-text" id="adminPopupText"></div>
+    <button type="button" class="btn-primary admin-popup-ok" id="adminPopupOk">OK</button>
+  </div>
+</div>
+
 <div class="settings-backdrop" id="resultBackdrop">
   <div class="settings-panel bracket">
     <span class="bl"></span><span class="br"></span>
@@ -796,6 +825,15 @@
     <div class="settings-row">
       <div class="settings-label"><span>MAX PLAYERS</span></div>
       <div class="theme-toggle" id="hostCapToggle"></div>
+    </div>
+    <div class="settings-row" id="hostTimerRow" style="display:none;">
+      <div class="settings-label"><span>MATCH TIMER</span><span id="hostTimerVal">NO LIMIT</span></div>
+      <div class="tw-wrap">
+        <div class="tw-col"><div class="tw-lab">MIN</div><div class="tw-box"><div class="tw-list" id="twMin"></div><div class="tw-hl"></div></div></div>
+        <div class="tw-colon">:</div>
+        <div class="tw-col"><div class="tw-lab">SEC</div><div class="tw-box"><div class="tw-list" id="twSec"></div><div class="tw-hl"></div></div></div>
+      </div>
+      <div class="mode-desc">Scroll to pick the match length. 00:00 = no time limit. When time runs out the room ends and the winner is shown. FFA and 2 Teams only.</div>
     </div>
     <button class="btn-primary" id="hostCreateBtn">CREATE &amp; DEPLOY</button>
   </div>
@@ -900,6 +938,7 @@
     <div class="settings-row">
       <div class="settings-label"><span>CONTROLS</span><span id="ctrlModeVal">MOBILE</span></div>
       <div class="theme-toggle">
+        <button class="theme-btn" id="ctrlAutoBtn" type="button">AUTO</button>
         <button class="theme-btn" id="ctrlKeyboardBtn" type="button">KEYBOARD</button>
         <button class="theme-btn" id="ctrlMobileBtn" type="button">MOBILE</button>
       </div>
@@ -1804,7 +1843,7 @@
     return [2,4,6,8,10];
   }
   const ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdFmt:'solo' };   // sdFmt: 'solo' | 'duo' | 'trio'
+  const hostDraft = { map:'crossfire', cap:4, mode:'ffa', sdFmt:'solo', secs:0 };   // sdFmt: 'solo' | 'duo' | 'trio'
   const MAP_ORDER = ['crossfire','flats','fortress','bunkers','grid','cross','tetris','maze','deadends','lostends','insanity','circle'];
   let OBSTACLES = CLASSIC_OBSTACLES;
 
@@ -1868,7 +1907,7 @@
   // ---------------------------------------------------------------
   const SETTINGS_KEY = 'tankArenaSettings';
   function loadSettings(){
-    const defaults = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light', joySize: 1, ctrlMode: autoCtrlMode(), ctrlChosen: false };   // light (white) mode is the default
+    const defaults = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light', joySize: 1, ctrlMode: 'auto', ctrlChosen: false };   // light (white) mode is the default
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       if (!raw) return defaults;
@@ -1885,8 +1924,8 @@
         theme: (parsed.themeChosen && parsed.theme !== 'light') ? 'dark' : 'light',
         themeChosen: !!parsed.themeChosen,
         joySize: clampSetting(parsed.joySize, 0.6, 2.5, 1),
-        // KEYBOARD or MOBILE: auto-picked from the device until the player chooses one in settings
-        ctrlMode: parsed.ctrlChosen ? (parsed.ctrlMode === 'keyboard' ? 'keyboard' : 'mobile') : autoCtrlMode(),
+        // AUTO (detect from the device / last input used), or a fixed KEYBOARD / MOBILE the player picked
+        ctrlMode: (parsed.ctrlChosen && (parsed.ctrlMode === 'keyboard' || parsed.ctrlMode === 'mobile')) ? parsed.ctrlMode : 'auto',
         ctrlChosen: !!parsed.ctrlChosen,
       };
     } catch(e){ return defaults; }
@@ -1907,7 +1946,26 @@
   function applyTheme(){
     document.documentElement.setAttribute('data-theme', state.settings.theme === 'dark' ? 'dark' : 'light');
   }
-  function ctrlMode(){ return state.settings.ctrlMode === 'keyboard' ? 'keyboard' : 'mobile'; }
+  // effective mode: the saved choice, or (AUTO) what the device / the last input you used says
+  let autoCtrlCur = null;
+  function ctrlMode(){
+    const m = state.settings.ctrlMode;
+    if (m === 'keyboard' || m === 'mobile') return m;
+    return autoCtrlCur || (autoCtrlCur = autoCtrlMode());
+  }
+  // AUTO follows what you actually use: a finger -> MOBILE, mouse / WASD / Space -> KEYBOARD (handy on hybrids, tablets with keyboards)
+  function noteInputKind(kind){
+    if (state.settings.ctrlMode !== 'auto' || autoCtrlCur === kind) return;
+    autoCtrlCur = kind;
+    resetInputVectors(); applyControlSettings();
+    if (byId('settingsBackdrop').classList.contains('show')) refreshSettingsUI();
+  }
+  window.addEventListener('pointerdown', (e)=>{ noteInputKind(e.pointerType === 'mouse' ? 'keyboard' : 'mobile'); }, true);
+  window.addEventListener('pointermove', (e)=>{ if (e.pointerType === 'mouse') noteInputKind('keyboard'); }, true);
+  window.addEventListener('keydown', (e)=>{
+    if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+    if (/^(Key[WASD]|Space|Arrow(Up|Down|Left|Right))$/.test(e.code)) noteInputKind('keyboard');
+  }, true);
   // joystick size -> CSS var, control mode -> <html data-ctrl>; also drops any stick/mouse input held right now
   function applyControlSettings(){
     const root = document.documentElement;
@@ -2402,7 +2460,7 @@
           addBotPeers(peersList);
           firePeers();
         } else if (msg.type === 'match' || msg.type === 'matchEnd' || msg.type === 'adminResult' || msg.type === 'adminKill' || msg.type === 'adminBanList' || msg.type === 'adminUnbanResult' ||
-                   msg.type === 'authResult' || msg.type === 'leaderboard' || msg.type === 'accountKills' || msg.type === 'accountDeleted' || msg.type === 'adminDeleteResult' || msg.type === 'adminBanResult'){
+                   msg.type === 'authResult' || msg.type === 'leaderboard' || msg.type === 'accountKills' || msg.type === 'accountDeleted' || msg.type === 'adminDeleteResult' || msg.type === 'adminBanResult' || msg.type === 'adminMsg' || msg.type === 'adminMsgResult'){
           serverListeners.forEach(cb=>{ try{ cb(msg); }catch(e){} });
         } else if (msg.type === 'banned'){
           banned = true;
@@ -2707,6 +2765,7 @@
   window.addEventListener('resize', fitCanvas);
 
   function enterGame(sector){
+    clearGameMessages();
     applyMap(mapOfSector(sector));
     state.currentSector = sector;
     state.roomMode = modeOfSector(sector);
@@ -2836,11 +2895,11 @@
       } else {
         startBtn.style.display = 'block';
         startBtn.textContent = nBots ? 'START MATCH (+' + nBots + ' BOT' + (nBots > 1 ? 'S' : '') + ')' : 'START MATCH';
-        statusEl.textContent = sdRoom ? ('Last ' + (meta.teams ? 'team' : 'player') + ' standing wins.' + (nBots ? ' ' + nBots + ' bot' + (nBots > 1 ? 's' : '') + ' will fill the empty seat' + (nBots > 1 ? 's' : '') + '.' : '')) : '';
+        statusEl.textContent = sdRoom ? ('Last ' + (meta.teams ? 'team' : 'player') + ' standing wins.' + (nBots ? ' ' + nBots + ' bot' + (nBots > 1 ? 's' : '') + ' will fill the empty seat' + (nBots > 1 ? 's' : '') + '.' : '')) : (meta && meta.secs ? 'Match length ' + fmtClock(meta.secs * 1000) + '.' : '');
       }
     } else {
       startBtn.style.display = 'none';
-      statusEl.textContent = sdOdd ? oddMsg : ('Waiting for ' + (host ? (host.presence.name || 'the host') : 'the host') + ' to start the match' + (nBots ? ' (' + nBots + ' bot' + (nBots > 1 ? 's' : '') + ' will join)' : '') + '\u2026');
+      statusEl.textContent = sdOdd ? oddMsg : ('Waiting for ' + (host ? (host.presence.name || 'the host') : 'the host') + ' to start the match' + (nBots ? ' (' + nBots + ' bot' + (nBots > 1 ? 's' : '') + ' will join)' : '') + (meta && meta.secs ? ' \u00b7 ' + fmtClock(meta.secs * 1000) + ' match' : '') + '\u2026');
     }
   }
   // Re-checked on every presence tick while waiting: picks up the host
@@ -2860,7 +2919,7 @@
       const prob = sdCountProblem(humans.length, meta); if (prob){ showToast(prob); return; }
       state.bots = sdBotPlan(humans, meta, state.bots);   // duo / trio: host bots keep their seats, auto bots fill what's left
     }
-    state.room.presence({ roomMeta: Object.assign({}, meta, { started: true }), bots: state.bots.length ? state.bots.map(botSlim) : null });
+    state.room.presence({ roomMeta: Object.assign({}, meta, { started: true, startedAt: srvNow() }), bots: state.bots.length ? state.bots.map(botSlim) : null });
   });
   byId('waitLeaveBtn').addEventListener('click', leaveSector);
 
@@ -2988,10 +3047,32 @@
   function spawnSpark(x,y,color,big){
     state.sparks.push({x,y,color,born:performance.now(), big: !!big});
   }
+  const KILLFEED_LIFE_MS = 8000;
+  let killfeedTimer = null;
   function pushKillfeed(text){
     state.killfeed.push({text, born: performance.now()});
     if (state.killfeed.length > 5) state.killfeed.shift();
     renderKillfeed();
+    clearTimeout(killfeedTimer);
+    killfeedTimer = setTimeout(expireKillfeed, KILLFEED_LIFE_MS + 50);
+  }
+  function expireKillfeed(){
+    const now = performance.now();
+    state.killfeed = state.killfeed.filter(k => now - k.born < KILLFEED_LIFE_MS);
+    renderKillfeed();
+    if (state.killfeed.length) killfeedTimer = setTimeout(expireKillfeed, 1000);
+  }
+  // leaving / joining a room: wipe the list AND the on-screen lines (resetting the array alone left the old text showing)
+  function clearKillfeed(){
+    clearTimeout(killfeedTimer);
+    state.killfeed = [];
+    renderKillfeed();
+  }
+  function clearGameMessages(){
+    clearKillfeed();
+    clearTimeout(showToast._t); byId('toast').classList.remove('show');   // e.g. 'DOWN - respawning...' / 'Your whole team is down'
+    byId('sdSpec').classList.remove('show');
+    if (typeof closeAdminPopup === 'function') closeAdminPopup();
   }
   function renderKillfeed(){
     const el = byId('killfeed');
@@ -3056,11 +3137,32 @@
     byId('chatBar').classList.remove('show');
     byId('chatInput').blur();
   }
+  // ---- admin direct message: an admin types "@username text" in chat -> that player gets a popup ----
+  let adminPopupTimer = null;
+  function showAdminPopup(from, text){
+    byId('adminPopupFrom').textContent = 'MESSAGE FROM ' + String(from || 'ADMIN').toUpperCase().slice(0, 16);
+    byId('adminPopupText').textContent = String(text || '').slice(0, 140);   // textContent: never parsed as HTML
+    byId('adminPopup').classList.add('show');
+    resetInputVectors();
+    if (state.currentSector) pushChat('[ADMIN] ' + String(from || 'ADMIN').slice(0, 16), null, String(text || ''), false);
+    clearTimeout(adminPopupTimer);
+    adminPopupTimer = setTimeout(closeAdminPopup, 15000);
+  }
+  function closeAdminPopup(){ clearTimeout(adminPopupTimer); byId('adminPopup').classList.remove('show'); }
+  byId('adminPopupOk').addEventListener('click', closeAdminPopup);
+  byId('adminPopup').addEventListener('click', (e)=>{ if (e.target.id === 'adminPopup') closeAdminPopup(); });
+
   function sendChat(){
     const inp = byId('chatInput');
     const text = inp.value.trim().slice(0, 140);
     inp.value = '';
     if (!text || !state.currentSector) return;
+    // "@name message" from an admin = private popup for that player (server re-checks admin; non-admins just chat normally)
+    const dm = state.adminUnlocked && text.match(/^@(\S+)\s+([\s\S]+)$/);
+    if (dm){
+      state.room.send({ type:'adminMsg', target: dm[1], text: dm[2].trim() });
+      return;
+    }
     pushChat(state.name, state.color.id, text, true); // sender renders locally, same pattern as shoot/kill
     state.room.emit('chat', { roomId: state.currentSector, name: state.name, color: state.color.id, text });
   }
@@ -6070,7 +6172,7 @@
     state.sd = null; state.lc = null; state.sdOut = false; state.sdTeams = false; state.sdTeamSize = 0;
     byId('sdSpec').classList.remove('show'); byId('sdPoison').textContent = ''; byId('sdPoison').classList.remove('low');
     byId('resultBackdrop').classList.remove('show');
-    state.bullets = []; state.sparks = []; state.killfeed = [];
+    state.bullets = []; state.sparks = []; clearGameMessages();
     state.chatLog = []; state.chatUnread = 0; byId('chatBtn').classList.remove('has-unread');
     state.zoneEnteredAt = null; byId('zoneWarn').textContent = ''; byId('zoneWarn').classList.remove('low');
     state.moveVec = {x:0,y:0,mag:0}; state.aimVec = {x:0,y:0,mag:0}; state.aimTouched = false;
@@ -6092,6 +6194,33 @@
     return String(Math.floor(s / 60)).padStart(2,'0') + ':' + String(s % 60).padStart(2,'0');
   }
 
+  // hosted FFA / 2 TEAMS room with a timer: ms left once the host has started it, else null
+  function hostedTimeLeft(){
+    const sec = state.currentSector;
+    if (!sec || !isCustomRoom(sec) || state.waitingToStart) return null;
+    const m = getRoomMeta(sec);
+    if (!m || !m.started || !m.secs || !m.startedAt || (m.mode !== 'ffa' && m.mode !== 'teams')) return null;
+    return Math.max(0, m.startedAt + m.secs * 1000 - srvNow());
+  }
+  function endHostedMatch(){
+    const sec = state.currentSector, m = sec && getRoomMeta(sec);
+    if (!m) return;
+    const players = peersIn(sec).filter(p => p.presence && p.presence.name !== undefined);
+    let results;
+    if (m.mode === 'teams'){
+      const tot = { red:0, blue:0 };
+      players.forEach(p=>{ const t = p.presence.team; if (t === 'red' || t === 'blue') tot[t] += (p.presence.score || 0); });
+      results = ['red','blue'].map(t=>({ peer:t, name:t.toUpperCase() + ' TEAM', color:t, score:tot[t] })).sort((a,b)=>b.score - a.score);
+    } else {
+      results = players.map(p=>({ peer:p.peer, name:(nameLabel(p.peer, sec) || p.presence.name || 'OPERATOR'), color:p.presence.color, score:p.presence.score || 0 })).sort((a,b)=>b.score - a.score);
+    }
+    const top = results.length ? results[0].score : 0;
+    const msg = { results, winners: results.filter(r=>r.score === top).map(r=>r.peer) };
+    const title = (m.name || 'ROOM') + " \u2014 TIME'S UP";
+    leaveSector();                    // same as Room 1: everyone is sent back to the lobby, then sees the result
+    showMatchResult(msg, title);
+    updateMatchUI();
+  }
   function updateMatchUI(){
     const lobbyEl = byId('roomTimer-A');
     const hudEl = byId('matchTimer');
@@ -6112,6 +6241,11 @@
       const h = sdHudInfo();
       hudEl.textContent = h.text;
       hudEl.classList.toggle('low', h.low);
+    } else if (hostedTimeLeft() !== null){
+      const left = hostedTimeLeft();
+      hudEl.textContent = fmtClock(left);
+      hudEl.classList.toggle('low', left <= 15000);
+      if (left <= 0) endHostedMatch();
     } else {
       hudEl.textContent = '';
       hudEl.classList.remove('low');
@@ -6119,12 +6253,17 @@
   }
   setInterval(updateMatchUI, 250);
 
+  let srvOffset = 0;   // serverNow - Date.now(); keeps hosted-room timers in step across players whose clocks differ
+  function srvNow(){ return Date.now() + srvOffset; }
   function handleMatchMessage(msg){
+    if (msg.type === 'match' && typeof msg.now === 'number') srvOffset = msg.now - Date.now();
     if (msg.type === 'adminResult'){ handleAdminResult(msg); return; }
     if (msg.type === 'adminKill'){ handleAdminKill(); return; }
     if (msg.type === 'banned'){ handleBanned(); return; }
     if (msg.type === 'adminBanList'){ showBanPanel(msg.bans || []); return; }
     if (msg.type === 'adminBanResult'){ handleAdminBanResult(msg); return; }
+    if (msg.type === 'adminMsg'){ showAdminPopup(msg.from, msg.text); return; }
+    if (msg.type === 'adminMsgResult'){ if (msg.ok) showToast('SENT to ' + msg.to); else showToast(msg.error || 'Could not send that message.'); return; }
     if (msg.type === 'adminUnbanResult'){ handleUnbanResult(msg); return; }
     if (msg.type === 'authResult'){ handleAuthResult(msg); return; }
     if (msg.type === 'leaderboard'){ state.leaderboard = msg.top || []; renderLeaderboard(); return; }
@@ -6148,8 +6287,8 @@
     }
   }
 
-  function showMatchResult(msg){
-    byId('resultTitle').textContent = "ROOM 1 \u2014 TIME'S UP";
+  function showMatchResult(msg, title){
+    byId('resultTitle').textContent = title || "ROOM 1 \u2014 TIME'S UP";
     const results = msg.results || [];
     const winners = msg.winners || [];
     const top = results.length ? results[0].score : 0;
@@ -6199,22 +6338,25 @@
     byId('sensMultVal').textContent = Math.round(state.settings.sensMult * 100) + '%';
     byId('themeDarkBtn').classList.toggle('active', state.settings.theme !== 'light');
     byId('themeLightBtn').classList.toggle('active', state.settings.theme === 'light');
-    const kb = ctrlMode() === 'keyboard';
-    byId('ctrlKeyboardBtn').classList.toggle('active', kb);
-    byId('ctrlMobileBtn').classList.toggle('active', !kb);
-    byId('ctrlModeVal').textContent = kb ? 'KEYBOARD' : 'MOBILE';
-    byId('ctrlModeDesc').textContent = kb
-      ? 'WASD to move, mouse to aim, hold left click or Space to fire. On-screen sticks are hidden.'
-      : 'On-screen sticks: left moves, right aims and fires. Bigger buttons for touch screens.';
+    const kb = ctrlMode() === 'keyboard', pref = state.settings.ctrlMode;
+    byId('ctrlAutoBtn').classList.toggle('active', pref === 'auto');
+    byId('ctrlKeyboardBtn').classList.toggle('active', pref === 'keyboard');
+    byId('ctrlMobileBtn').classList.toggle('active', pref === 'mobile');
+    byId('ctrlModeVal').textContent = (pref === 'auto' ? 'AUTO \u2192 ' : '') + (kb ? 'KEYBOARD' : 'MOBILE');
+    byId('ctrlModeDesc').textContent = (pref === 'auto' ? 'Detects your device and switches when you touch the screen or use the mouse / keyboard. ' : '') + (kb
+      ? 'WASD to move, mouse to aim, hold left click or Space to fire. Sticks hidden.'
+      : 'On-screen sticks: left moves, right aims and fires. Bigger buttons.');
     byId('joySizeSlider').value = Math.round(state.settings.joySize * 100);
     byId('joySizeVal').textContent = Math.round(state.settings.joySize * 100) + '%';
     byId('joySizeRow').classList.toggle('dim', kb);
     byId('sensMultSlider').closest('.settings-row').classList.toggle('dim', kb);
   }
   function setCtrlMode(m){
-    state.settings.ctrlMode = m; state.settings.ctrlChosen = true;
+    state.settings.ctrlMode = m; state.settings.ctrlChosen = (m !== 'auto');
+    if (m === 'auto') autoCtrlCur = autoCtrlMode();
     resetInputVectors(); applyControlSettings(); saveSettings(); refreshSettingsUI();
   }
+  byId('ctrlAutoBtn').addEventListener('click', ()=>setCtrlMode('auto'));
   byId('ctrlKeyboardBtn').addEventListener('click', ()=>setCtrlMode('keyboard'));
   byId('ctrlMobileBtn').addEventListener('click', ()=>setCtrlMode('mobile'));
   byId('joySizeSlider').addEventListener('input', (e)=>{
@@ -6269,7 +6411,7 @@
     refreshSettingsUI();
   });
   byId('settingsResetBtn').addEventListener('click', ()=>{
-    state.settings = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light', joySize: 1, ctrlMode: autoCtrlMode(), ctrlChosen: false };
+    state.settings = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light', joySize: 1, ctrlMode: 'auto', ctrlChosen: false };
     resetInputVectors();
     applyControlSettings();
     applyTheme();
@@ -6309,6 +6451,9 @@
       mode,
       teams,
       started: !!(m && m.started),
+      // match length in seconds (0 = no limit); only FFA / 2 TEAMS rooms are timed. startedAt = server-clock ms when the host hit START
+      secs: (mode === 'ffa' || mode === 'teams') ? Math.max(0, Math.min(3600, parseInt(m && m.secs, 10) || 0)) : 0,
+      startedAt: (m && typeof m.startedAt === 'number' && isFinite(m.startedAt)) ? m.startedAt : 0,
     };
   }
   function modeOfSector(sector){
@@ -6633,6 +6778,14 @@
     if (sdOn && SD_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
     if (hostDraft.mode === 'ctf' && CTF_BLOCKED_MAPS.includes(hostDraft.map)) hostDraft.map = 'crossfire';
     byId('hostSdRow').style.display = sdOn ? '' : 'none';
+    {
+      const timed = hostDraft.mode === 'ffa' || hostDraft.mode === 'teams', row = byId('hostTimerRow');
+      const wasShown = row.style.display !== 'none';
+      row.style.display = timed ? '' : 'none';
+      if (!timed) hostDraft.secs = 0;
+      else if (!wasShown) requestAnimationFrame(syncTimerWheels);   // wheels can only be positioned once visible
+      updateTimerLabel();
+    }
     byId('hostSdName').textContent = hostDraft.sdFmt === 'trio' ? 'TRIO \u00b7 3 PER TEAM \u00b7 MAX 9 \u00b7 BOTS FILL GAPS' : hostDraft.sdFmt === 'duo' ? 'DUO \u00b7 2 PER TEAM \u00b7 BOT FILLS AN ODD SEAT' : 'SOLO';
     byId('hostSdToggle').querySelectorAll('.theme-btn').forEach(el=>el.classList.toggle('active', el.dataset.fmt === hostDraft.sdFmt));
     // player-count choices depend on the mode / format (see capChoices)
@@ -6695,15 +6848,57 @@
     if (!inp.value) inp.value = (state.name + "'S ROOM").slice(0,20).toUpperCase();
     buildHostUI();   // rebuilt each open so thumbnails match the current theme
     byId('hostBackdrop').classList.add('show');
+    requestAnimationFrame(syncTimerWheels);
   }
   function closeHost(){ byId('hostBackdrop').classList.remove('show'); }
+  // ---- host timer wheels (scroll-snap pickers) ----
+  const TW_ROW = 40, TW_SECS = [0, 15, 30, 45];
+  function updateTimerLabel(){
+    byId('hostTimerVal').textContent = hostDraft.secs > 0 ? fmtClock(hostDraft.secs * 1000) : 'NO LIMIT';
+  }
+  function twBuild(list, values, fmt){
+    list.innerHTML = '';
+    values.forEach((v, i)=>{
+      const it = document.createElement('div');
+      it.className = 'tw-item'; it.textContent = fmt(v);
+      it.addEventListener('click', ()=> list.scrollTo({ top: i * TW_ROW, behavior: 'smooth' }));   // tap / click an entry to jump to it
+      list.appendChild(it);
+    });
+  }
+  function twIndex(list){ return Math.max(0, Math.min(list.children.length - 1, Math.round(list.scrollTop / TW_ROW))); }
+  function twMark(list){
+    const i = twIndex(list);
+    Array.prototype.forEach.call(list.children, (el, k)=> el.classList.toggle('sel', k === i));
+  }
+  function twRead(){
+    hostDraft.secs = Math.min(3600, twIndex(byId('twMin')) * 60 + TW_SECS[twIndex(byId('twSec'))]);
+    updateTimerLabel();
+  }
+  function syncTimerWheels(){
+    const mins = Math.floor(hostDraft.secs / 60), secIdx = Math.max(0, TW_SECS.indexOf(hostDraft.secs % 60));
+    byId('twMin').scrollTop = mins * TW_ROW;
+    byId('twSec').scrollTop = secIdx * TW_ROW;
+    twMark(byId('twMin')); twMark(byId('twSec')); updateTimerLabel();
+  }
+  (function initTimerWheels(){
+    const minL = byId('twMin'), secL = byId('twSec');
+    twBuild(minL, Array.from({length:60}, (_, i)=>i), v=>String(v).padStart(2,'0'));   // 00-59 min
+    twBuild(secL, TW_SECS, v=>String(v).padStart(2,'0'));
+    [minL, secL].forEach(list=>{
+      let t = null;
+      list.addEventListener('scroll', ()=>{
+        twMark(list); twRead();
+        clearTimeout(t); t = setTimeout(()=>{ twMark(list); twRead(); }, 90);
+      }, { passive:true });
+    });
+  })();
   byId('hostBtn').addEventListener('click', openHost);
   byId('hostCloseBtn').addEventListener('click', closeHost);
   byId('hostBackdrop').addEventListener('click', (e)=>{ if (e.target.id === 'hostBackdrop') closeHost(); });
   byId('hostCreateBtn').addEventListener('click', ()=>{
     if (state.currentSector) return;
     if (!state.connected){ showToast('Not linked yet \u2014 try again in a moment.'); return; }
-    const meta = normMeta({ name: byId('hostNameInput').value.trim() || (state.name + "'S ROOM"), map: hostDraft.map, cap: hostDraft.cap, mode: hostDraft.mode, teams: hostDraft.mode === 'showdown' && hostDraft.sdFmt !== 'solo' ? hostDraft.sdFmt : false });
+    const meta = normMeta({ name: byId('hostNameInput').value.trim() || (state.name + "'S ROOM"), map: hostDraft.map, cap: hostDraft.cap, mode: hostDraft.mode, secs: (hostDraft.mode === 'ffa' || hostDraft.mode === 'teams') ? hostDraft.secs : 0, teams: hostDraft.mode === 'showdown' && hostDraft.sdFmt !== 'solo' ? hostDraft.sdFmt : false });
     closeHost();
     joinSector(newRoomId(), meta);
   });

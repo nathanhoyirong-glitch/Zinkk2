@@ -159,7 +159,10 @@ function sanitizePresence(d) {
       mode: KNOWN_MODES.has(m.mode) ? m.mode : 'ffa',
       // Showdown format: false = solo, 'duo' = teams of 2, 'trio' = teams of 3 (ignored for every other mode)
       teams: m.mode === 'showdown' ? (m.teams === 'trio' ? 'trio' : (m.teams === 'duo' || m.teams === true) ? 'duo' : false) : false,
-      started: !!m.started
+      started: !!m.started,
+      // host-chosen match length in seconds (0 = no limit); only FFA and 2 TEAMS rooms can be timed
+      secs: (m.mode === 'ffa' || m.mode === 'teams') ? Math.max(0, Math.min(3600, parseInt(m.secs, 10) || 0)) : 0,
+      startedAt: (typeof m.startedAt === 'number' && isFinite(m.startedAt)) ? Math.max(0, m.startedAt) : 0
     };
   }
   if ('team' in d && d.team !== null && !KNOWN_TEAMS.has(d.team)) delete d.team;
@@ -354,6 +357,37 @@ wss.on('connection', (ws, req) => {
       const t = peers.get(msg.target);
       if (!t || !p.presence.roomId || t.presence.roomId !== p.presence.roomId) return;
       if (t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify({ type: 'adminKill' }));
+    } else if (msg.type === 'adminMsg') {
+      // admin-only direct message: "@username text" typed in chat. Looks the target up by display name or
+      // account across every connection (same lookup as adminBan) and pops the text up on THEIR screen only.
+      // Checked against p.admin here, so a normal player can't fake an admin message.
+      if (!p.admin || typeof msg.target !== 'string' || typeof msg.text !== 'string') return;
+      const key = msg.target.trim().toLowerCase();
+      const text = msg.text.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 140);
+      if (!key || !text) {
+        ws.send(JSON.stringify({ type: 'adminMsgResult', ok: false, error: 'Usage: @username message' }));
+        return;
+      }
+      let target = null;
+      for (const [pid, pp] of peers) {
+        if (pid === id) continue;
+        if (pp.account === key || (pp.presence.name || '').trim().toLowerCase() === key) { target = pp; break; }
+      }
+      if (!target) {
+        for (const [pid, pp] of peers) {   // fall back to a unique name prefix
+          if (pid !== id && (pp.presence.name || '').trim().toLowerCase().startsWith(key)) {
+            if (target) { target = null; break; }
+            target = pp;
+          }
+        }
+      }
+      if (!target || target.ws.readyState !== WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'adminMsgResult', ok: false, error: 'No player \"' + msg.target.trim().slice(0, 16) + '\" online.' }));
+        return;
+      }
+      const fromName = (p.presence.name || (p.account && accounts.get(p.account) && accounts.get(p.account).username) || 'ADMIN').slice(0, 16);
+      target.ws.send(JSON.stringify({ type: 'adminMsg', from: fromName, text }));
+      ws.send(JSON.stringify({ type: 'adminMsgResult', ok: true, to: (target.presence.name || msg.target.trim()).slice(0, 16) }));
     } else if (msg.type === 'adminSetTank') {
       // admin-only; target must be in the same room as the admin. Unlike a
       // player's own presence updates (which strip adminTank unless THEY
