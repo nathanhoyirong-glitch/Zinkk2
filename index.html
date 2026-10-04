@@ -4416,6 +4416,9 @@
     { name: 'NORMAL', SPEED: 215, FIRE_MS: 950,  DMG: 20, ERR: 0.14, SEE: 720, KEEP_MIN: 200, KEEP_MAX: 400, TURN: 6 },
     { name: 'HARD',   SPEED: 255, FIRE_MS: 620,  DMG: 20, ERR: 0.06, SEE: 900, KEEP_MIN: 180, KEEP_MAX: 360, TURN: 9 },
     { name: 'INSANE', SPEED: 300, FIRE_MS: 380,  DMG: 28, ERR: 0.015, SEE: 1200, KEEP_MIN: 160, KEEP_MAX: 320, TURN: 14 },
+    // IMPOSSIBLE: perfect aim that leads moving targets, dodges incoming bullets, picks strafe sides that
+    // aren't walled in, backs off when hurt, and never loses a target it can path to.
+    { name: 'IMPOSSIBLE', SPEED: 335, FIRE_MS: 250, DMG: 30, ERR: 0, SEE: 3000, KEEP_MIN: 170, KEEP_MAX: 300, TURN: 60, SMART: true },
   ];
   // Room 3 uses the room-wide level; host-added bots in hosted rooms each carry their own level (b.lvl)
   function botCfg(b){
@@ -4639,6 +4642,58 @@
   }
 
   // per frame, host only
+  // ---- IMPOSSIBLE-level brain helpers ----
+  // estimate the target's velocity from its last two sightings (presence only carries positions)
+  function botTrackTarget(b, tgt, now){
+    const tv = b.tv;
+    if (!tv || tv.id !== tgt.id){ b.tv = { id: tgt.id, x: tgt.x, y: tgt.y, t: now, vx: 0, vy: 0 }; return; }
+    const dtS = (now - tv.t) / 1000;
+    if (dtS < 0.04) return;
+    const k = 0.5, vx = (tgt.x - tv.x) / dtS, vy = (tgt.y - tv.y) / dtS;
+    tv.vx = Math.abs(vx) < 700 ? tv.vx + (vx - tv.vx) * k : tv.vx;
+    tv.vy = Math.abs(vy) < 700 ? tv.vy + (vy - tv.vy) * k : tv.vy;
+    tv.x = tgt.x; tv.y = tgt.y; tv.t = now;
+  }
+  // angle that makes a bullet of speed `spd` meet the moving target (iterated intercept)
+  function botLeadAngle(b, tgt, spd){
+    const tv = b.tv && b.tv.id === tgt.id ? b.tv : null;
+    if (!tv) return Math.atan2(tgt.y - b.y, tgt.x - b.x);
+    let px = tgt.x, py = tgt.y;
+    for (let i = 0; i < 4; i++){
+      const t = Math.hypot(px - b.x, py - b.y) / spd;
+      px = tgt.x + tv.vx * t; py = tgt.y + tv.vy * t;
+      // aim at the spot the target can actually reach: don't lead it through a wall
+      px = Math.max(TANK_R, Math.min(ARENA_W - TANK_R, px)); py = Math.max(TANK_R, Math.min(ARENA_H - TANK_R, py));
+      if (!botLOS(tgt.x, tgt.y, px, py, TANK_R * 0.6)){ px = tgt.x; py = tgt.y; break; }
+    }
+    return Math.atan2(py - b.y, px - b.x);
+  }
+  // look at every hostile bullet in flight; if one will pass through us soon, return the sidestep direction
+  function botDodge(b){
+    const me = botId(b);
+    let best = null, bestT = 0.7;
+    for (const bl of state.bullets){
+      if (bl.shooterId === me || (b.team && bl.shooterTeam === b.team) || bl.fw) continue;
+      const sp = Math.hypot(bl.vx, bl.vy); if (sp < 1) continue;
+      const ux = bl.vx / sp, uy = bl.vy / sp, rx = b.x - bl.x, ry = b.y - bl.y;
+      const along = rx * ux + ry * uy;
+      if (along < 0 || along / sp > bestT) continue;                         // behind us, or too far off in time
+      const cross = rx * uy - ry * ux;                                       // signed miss distance
+      if (Math.abs(cross) > TANK_R + (bl.r || BULLET_R) + 22) continue;       // it will miss
+      best = { t: along / sp, nx: -uy, ny: ux, side: cross >= 0 ? -1 : 1, bl };
+      bestT = best.t;
+    }
+    if (!best) return null;
+    // try stepping off the bullet's line on the side we're already on, then the other side
+    for (const sd of [best.side, -best.side]){
+      const dx = best.nx * sd, dy = best.ny * sd;
+      if (canOccupy(b.x + dx * 36, b.y + dy * 36) && canOccupy(b.x + dx * 16, b.y + dy * 16)) return { x: dx, y: dy, urgent: best.t < 0.35 };
+    }
+    // boxed in sideways: back straight away along the bullet's path instead
+    const bx = best.bl.vx, by = best.bl.vy, bl2 = Math.hypot(bx, by);
+    return { x: bx / bl2, y: by / bl2, urgent: true };
+  }
+
   function botsUpdate(dt){
     const sd = state.sd || state.tr || HB_IDLE;   // host-added bots (FFA / TEAMS) have no Showdown / training state
     if (!state.currentSector || !state.bots.length) return;
@@ -4680,6 +4735,7 @@
       } else if (b.wander > now){
         mx = Math.cos(b.wanderA); my = Math.sin(b.wanderA);                                              // got stuck: shake loose
       } else if (tgt && !botLOS(b.x, b.y, tgt.x, tgt.y, TANK_R + 2)){
+        if (C.SMART) b.pathAt = Math.min(b.pathAt || 0, now + 150);   // keep the route fresh on a moving target
         // a wall is in the way: walk around it along a real path instead of grinding against it
         const wp = botPathStep(b, tgt, now);
         if (wp){ const a = Math.atan2(wp.y - b.y, wp.x - b.x); mx = Math.cos(a); my = Math.sin(a); }
@@ -4689,11 +4745,26 @@
         if (td > C.KEEP_MAX){ mx = Math.cos(a); my = Math.sin(a); }
         else if (td < C.KEEP_MIN){ mx = -Math.cos(a); my = -Math.sin(a); }
         else { mx = Math.cos(a) * 0.25; my = Math.sin(a) * 0.25; }                                      // in the sweet spot: circle, don't shuffle
+        if (C.SMART){
+          // pick a strafe side that has room, and change it at unpredictable moments
+          const px = -Math.sin(a), py = Math.cos(a);
+          if (!canOccupy(b.x + px * b.dir * 50, b.y + py * b.dir * 50) && canOccupy(b.x - px * b.dir * 50, b.y - py * b.dir * 50)) b.dir = -b.dir;
+          if (now > b.flipAt){ b.dir = -b.dir; b.flipAt = now + 350 + Math.random() * 900; }
+          if (b.hp < b.mh * 0.35 && td < C.KEEP_MAX + 150){ mx = -Math.cos(a) * 1.2; my = -Math.sin(a) * 1.2; }   // hurt: open the distance
+        } else
         if (now > b.flipAt){ b.dir = -b.dir; b.flipAt = now + 1500 + Math.random() * 2200; }
         const strafe = (MAPS[ACTIVE_MAP] && (MAPS[ACTIVE_MAP].tight || MAPS[ACTIVE_MAP].curved)) ? 0.15 : 0.9;   // narrow corridors: barely strafe, it just grinds into walls
         mx += -Math.sin(a) * b.dir * strafe; my += Math.cos(a) * b.dir * strafe;                              // strafe
       } else {
         const a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x); mx = Math.cos(a) * 0.5; my = Math.sin(a) * 0.5;
+      }
+      if (C.SMART && tgt){ botTrackTarget(b, tgt, now); }
+      if (C.SMART){
+        const dg = botDodge(b);
+        if (dg){
+          const l0 = Math.hypot(mx, my) || 1, w = dg.urgent ? 4 : 1.6;   // an imminent hit overrides everything else
+          mx = mx / l0 + dg.x * w; my = my / l0 + dg.y * w;
+        }
       }
       const len = Math.hypot(mx, my);
       if (len > 0.01){
@@ -4708,10 +4779,14 @@
       }
       // aim + shoot
       if (tgt && td < C.SEE){
-        const want = Math.atan2(tgt.y - b.y, tgt.x - b.x);
+        let want;
+        if (C.SMART){
+          const bspd = BULLET_SPEED * ((b.tank && LOADOUTS[b.tank] && LOADOUTS[b.tank].speedMul) || 1) * (b.up ? 1 + b.up.bulletspeed * 0.045 : 1);
+          want = botLeadAngle(b, tgt, bspd);
+        } else want = Math.atan2(tgt.y - b.y, tgt.x - b.x);
         let da = want - b.a; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
         b.a += Math.max(-C.TURN * dt, Math.min(C.TURN * dt, da));
-        if (Math.abs(da) < 0.25 && now >= b.nextShot && botLOS(b.x, b.y, tgt.x, tgt.y)){
+        if (Math.abs(da) < (C.SMART ? 0.05 : 0.25) && now >= b.nextShot && botLOS(b.x, b.y, tgt.x, tgt.y)){
           b.nextShot = now + C.FIRE_MS * (b.up ? Math.pow(0.965, b.up.reload) : 1) * ((b.tank && LOADOUTS[b.tank] && LOADOUTS[b.tank].fireMul) || 1) * (0.9 + Math.random() * 0.4);
           botFire(b);
         }
@@ -4745,6 +4820,7 @@
     { regen: 1, maxhp: 2, bodydmg: 0, bulletspeed: 2, penetration: 1, bulletdmg: 3, reload: 3, movespeed: 2 },   // NORMAL
     { regen: 1, maxhp: 2, bodydmg: 0, bulletspeed: 2, penetration: 2, bulletdmg: 4, reload: 4, movespeed: 3 },   // HARD
     { regen: 2, maxhp: 3, bodydmg: 0, bulletspeed: 3, penetration: 2, bulletdmg: 5, reload: 5, movespeed: 4 },   // INSANE
+    { regen: 3, maxhp: 4, bodydmg: 0, bulletspeed: 4, penetration: 3, bulletdmg: 6, reload: 6, movespeed: 5 },   // IMPOSSIBLE
   ];
   function hbSpendPoint(b){
     const w = HB_STAT_WEIGHTS[b.lvl] || HB_STAT_WEIGHTS[1];
