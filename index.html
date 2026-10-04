@@ -1970,7 +1970,12 @@
   function applyControlSettings(){
     const root = document.documentElement;
     root.style.setProperty('--joy-size', Math.round(128 * state.settings.joySize) + 'px');
-    root.setAttribute('data-ctrl', ctrlMode());
+    // iPad / large touch tablets: joysticks stay, but the HUD uses the same layout as computer mode
+    // (the phone-only "mobile" CSS with its oversized buttons is skipped via the "tablet" value).
+    const ipad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+    const bigTouch = Math.min(screen.width, screen.height) >= 700 && ((navigator.maxTouchPoints || 0) > 0);
+    const mode = ctrlMode();
+    root.setAttribute('data-ctrl', (mode === 'mobile' && (ipad || bigTouch)) ? 'tablet' : mode);
   }
   function resetInputVectors(){
     state.moveVec = {x:0,y:0,mag:0}; state.aimVec = {x:0,y:0,mag:0}; state.aimTouched = false;
