@@ -249,7 +249,7 @@
 
   /* ---------- diep.io-style stat allocation panel ---------- */
   .stats-panel {
-    position:absolute; left:10px; bottom:max(156px, calc(148px + env(safe-area-inset-bottom)));
+    position:absolute; left:10px; bottom:calc(min(var(--joy-size), 42vw) + 28px + env(safe-area-inset-bottom, 0px));
     width:min(268px, calc(100% - 20px)); z-index:9; pointer-events:none;
     display:none; flex-direction:column;
   }
@@ -291,28 +291,83 @@
      barrel and fires while pushed out. Shown on every platform so
      mouse-drag and touch both work the same way. */
   .touch-ui { position:absolute; inset:0; pointer-events:none; display:block; }
+  :root { --joy-size:128px; }
   .joystick {
-    position:absolute; bottom: max(18px, env(safe-area-inset-bottom)); width:128px; height:128px; pointer-events:auto;
-    touch-action:none;
+    position:absolute; bottom: max(18px, env(safe-area-inset-bottom));
+    width:min(var(--joy-size), 42vw); height:min(var(--joy-size), 42vw); pointer-events:auto;
+    touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
   }
   .joy-move { left: max(18px, env(safe-area-inset-left)); }
   .joy-aim  { right: max(18px, env(safe-area-inset-right)); }
   .joy-base {
     position:absolute; inset:0; border-radius:50%;
-    background: rgba(var(--panel-rgb),0.6); border:1px solid var(--line-bright);
+    background: rgba(255,255,255,0.12); border:2px solid rgba(255,255,255,0.7);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(0,0,0,0.12);
   }
-  .joy-move .joy-base { border-color: var(--green-dim); }
-  .joy-aim .joy-base { border-color: var(--red); }
   .joy-label {
     position:absolute; top:-18px; left:0; right:0; text-align:center;
-    font-size:10px; letter-spacing:0.1em; color: var(--ink-dim); pointer-events:none;
+    font-size:10px; letter-spacing:0.1em; color:#fff; text-shadow:0 0 3px rgba(0,0,0,0.8); pointer-events:none;
   }
   .joy-nub {
-    position:absolute; width:52px; height:52px; border-radius:50%; left:50%; top:50%;
-    transform: translate(-50%,-50%); background: rgba(110,227,154,0.28);
-    border:2px solid var(--green); pointer-events:none;
+    position:absolute; width:40.6%; height:40.6%; border-radius:50%; left:50%; top:50%;
+    transform: translate(-50%,-50%); background: rgba(255,255,255,0.35);
+    border:2px solid rgba(255,255,255,0.9); box-shadow: 0 0 0 1px rgba(0,0,0,0.25); pointer-events:none;
   }
-  .joy-aim .joy-nub { background: rgba(227,94,110,0.28); border-color: var(--red); }
+
+
+  /* ---------- touch reliability + control modes ---------- */
+  button, .loadout-tile, .swatch, .map-card, .admin-tile { touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+  #screen-game { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+  #settingsBackdrop { overflow-y:auto; align-items:flex-start; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+  #settingsBackdrop .settings-panel { margin:auto; }
+  .settings-row.dim { opacity:0.45; }
+  .mode-desc.ctrl-desc { line-height:1.5; }
+
+  /* KEYBOARD mode: no on-screen sticks, WASD + mouse (click / hold to fire) */
+  html[data-ctrl="keyboard"] .touch-ui { display:none; }
+  html[data-ctrl="keyboard"] .stats-panel { bottom:18px; }
+  html[data-ctrl="keyboard"] .sd-spec { bottom:20px; }
+  html[data-ctrl="keyboard"] #arena { cursor:crosshair; }
+
+  /* MOBILE mode: bigger touch targets everywhere in the game screen */
+  html[data-ctrl="mobile"] .hud-left { flex-wrap:wrap; gap:8px; }
+  html[data-ctrl="mobile"] .hud-leave-btn { width:42px; height:42px; font-size:19px; }
+  html[data-ctrl="mobile"] .hud-top { padding-left:10px; padding-right:10px; }
+  html[data-ctrl="mobile"] .minimap, html[data-ctrl="mobile"] .loadout-choice { top:74px; }
+  html[data-ctrl="mobile"] .chatbar { top:70px; }
+  html[data-ctrl="mobile"] .train-bar { top:96px; gap:8px; }
+  html[data-ctrl="mobile"] .train-bar button, html[data-ctrl="mobile"] .train-bar .tr-count { height:40px; padding:0 14px; font-size:12px; }
+  html[data-ctrl="mobile"] .chat-send-btn { padding:0 18px; min-height:44px; font-size:13px; }
+  html[data-ctrl="mobile"] .chatbar input { padding:13px 12px; font-size:16px; }
+  html[data-ctrl="mobile"] .chat-header { padding:10px 12px; }
+  html[data-ctrl="mobile"] .loadout-tile { width:92px; height:92px; }
+  html[data-ctrl="mobile"] .loadout-tile img { width:58px; }
+  html[data-ctrl="mobile"] .loadout-tile.captioned { width:100px; height:100px; }
+  html[data-ctrl="mobile"] .loadout-tile.captioned img { width:68px; }
+  html[data-ctrl="mobile"] .loadout-tile.captioned span { font-size:9px; }
+  html[data-ctrl="mobile"] .loadout-choice-grid { gap:12px; }
+  html[data-ctrl="mobile"] .mm-resize { width:30px; height:30px; }
+  html[data-ctrl="mobile"] .sd-spec button { padding:10px 16px; }
+  html[data-ctrl="mobile"] .stats-panel { width:min(300px, calc(100% - 20px)); }
+  html[data-ctrl="mobile"] .stat-row { height:36px; max-height:36px; border-radius:18px; margin-bottom:6px; }
+  html[data-ctrl="mobile"] .stat-row.disabled { max-height:0; opacity:0; margin-bottom:0; pointer-events:none; }
+  html[data-ctrl="mobile"] .stat-label { font-size:12px; }
+  html[data-ctrl="mobile"] .stat-key { display:none; }
+  html[data-ctrl="mobile"] .stats-points-tag { font-size:18px; top:-20px; }
+  html[data-ctrl="mobile"] .btn-ghost, html[data-ctrl="mobile"] .theme-btn { min-height:44px; }
+  html[data-ctrl="mobile"] .settings-panel input[type=range] { height:34px; }
+  html[data-ctrl="mobile"] .wait-row .wait-mini button, html[data-ctrl="mobile"] .wait-botbar .btn-ghost { min-height:40px; padding:8px 12px; }
+
+  /* short landscape phones: stat panel becomes two columns between the two sticks */
+  @media (max-height:520px) {
+    html[data-ctrl="mobile"] .stats-panel.show { display:grid; grid-template-columns:1fr 1fr; column-gap:6px; align-content:end;
+      left:calc(min(var(--joy-size), 42vw) + 30px); bottom:max(14px, env(safe-area-inset-bottom));
+      width:min(340px, calc(100% - 2 * min(var(--joy-size), 42vw) - 70px)); }
+    html[data-ctrl="mobile"] .stat-row { height:32px; max-height:32px; margin-bottom:5px; }
+    html[data-ctrl="mobile"] .stat-row.disabled { max-height:0; margin-bottom:0; }
+    html[data-ctrl="mobile"] .stat-label { font-size:10.5px; padding-left:10px; padding-right:6px; }
+    html[data-ctrl="mobile"] .sd-spec { bottom:calc(min(var(--joy-size), 42vw) + 30px); }
+  }
 
   .toast {
     position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:50;
@@ -384,7 +439,7 @@
   .map-card.picked { border-color:var(--green); color:var(--ink); box-shadow:0 0 0 1px var(--green); }
   .map-card.disabled { opacity:0.3; cursor:not-allowed; filter:grayscale(1); }
   .sd-spec {
-    position:absolute; left:50%; bottom:150px; transform:translateX(-50%); z-index:6;
+    position:absolute; left:50%; bottom:calc(min(var(--joy-size), 42vw) + 22px); transform:translateX(-50%); z-index:6;
     display:none; align-items:center; gap:12px; padding:8px 12px; font-size:12px; letter-spacing:0.08em;
     background:rgba(var(--panel-rgb),0.88); border:1px solid var(--line-bright); border-radius:var(--radius); color:var(--ink);
   }
@@ -583,10 +638,9 @@
       <span class="bl"></span><span class="br"></span>
       <h3>FIELD MANUAL</h3>
       <div class="howto-grid">
-        <div><b>Left stick</b> &nbsp;move</div>
-        <div><b>Right stick</b> &nbsp;aim the barrel &amp; fire</div>
-        <div><b>W A S D</b> &nbsp;move (keyboard alt.)</div>
-        <div><b>Space</b> &nbsp;fire (keyboard alt.)</div>
+        <div><b>Mobile:</b> left stick moves, right stick aims &amp; fires</div>
+        <div><b>Keyboard:</b> <b>W A S D</b> move, mouse aims, click / hold or <b>Space</b> fires</div>
+        <div>Switch in <b>&#9881; Settings &rarr; Controls</b>; joystick size is there too</div>
       </div>
     </div>
   </section>
@@ -844,6 +898,15 @@
     </div>
 
     <div class="settings-row">
+      <div class="settings-label"><span>CONTROLS</span><span id="ctrlModeVal">MOBILE</span></div>
+      <div class="theme-toggle">
+        <button class="theme-btn" id="ctrlKeyboardBtn" type="button">KEYBOARD</button>
+        <button class="theme-btn" id="ctrlMobileBtn" type="button">MOBILE</button>
+      </div>
+      <div class="mode-desc ctrl-desc" id="ctrlModeDesc"></div>
+    </div>
+
+    <div class="settings-row">
       <div class="settings-label"><span>MOVEMENT SPEED</span><span id="moveMultVal">75%</span></div>
       <input type="range" id="moveMultSlider" min="50" max="200" step="5" value="75" />
     </div>
@@ -854,6 +917,10 @@
     <div class="settings-row">
       <div class="settings-label"><span>STICK SENSITIVITY</span><span id="sensMultVal">100%</span></div>
       <input type="range" id="sensMultSlider" min="50" max="200" step="5" value="100" />
+    </div>
+    <div class="settings-row" id="joySizeRow">
+      <div class="settings-label"><span>JOYSTICK SIZE</span><span id="joySizeVal">100%</span></div>
+      <input type="range" id="joySizeSlider" min="60" max="250" step="5" value="100" />
     </div>
 
     <div class="settings-row">
@@ -1801,7 +1868,7 @@
   // ---------------------------------------------------------------
   const SETTINGS_KEY = 'tankArenaSettings';
   function loadSettings(){
-    const defaults = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light' };   // light (white) mode is the default
+    const defaults = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light', joySize: 1, ctrlMode: autoCtrlMode(), ctrlChosen: false };   // light (white) mode is the default
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       if (!raw) return defaults;
@@ -1817,8 +1884,17 @@
         // only keep a saved DARK theme if the player picked it themselves; everyone else gets light
         theme: (parsed.themeChosen && parsed.theme !== 'light') ? 'dark' : 'light',
         themeChosen: !!parsed.themeChosen,
+        joySize: clampSetting(parsed.joySize, 0.6, 2.5, 1),
+        // KEYBOARD or MOBILE: auto-picked from the device until the player chooses one in settings
+        ctrlMode: parsed.ctrlChosen ? (parsed.ctrlMode === 'keyboard' ? 'keyboard' : 'mobile') : autoCtrlMode(),
+        ctrlChosen: !!parsed.ctrlChosen,
       };
     } catch(e){ return defaults; }
+  }
+  function autoCtrlMode(){
+    const touch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0 ||
+      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    return touch ? 'mobile' : 'keyboard';
   }
   function clampSetting(v, lo, hi, fallback){
     v = Number(v);
@@ -1830,6 +1906,18 @@
   }
   function applyTheme(){
     document.documentElement.setAttribute('data-theme', state.settings.theme === 'dark' ? 'dark' : 'light');
+  }
+  function ctrlMode(){ return state.settings.ctrlMode === 'keyboard' ? 'keyboard' : 'mobile'; }
+  // joystick size -> CSS var, control mode -> <html data-ctrl>; also drops any stick/mouse input held right now
+  function applyControlSettings(){
+    const root = document.documentElement;
+    root.style.setProperty('--joy-size', Math.round(128 * state.settings.joySize) + 'px');
+    root.setAttribute('data-ctrl', ctrlMode());
+  }
+  function resetInputVectors(){
+    state.moveVec = {x:0,y:0,mag:0}; state.aimVec = {x:0,y:0,mag:0}; state.aimTouched = false;
+    if (state.kbMouse) state.kbMouse.down = false;
+    ['joyMoveNub','joyAimNub'].forEach(id=>{ const n = byId(id); if (n) n.style.transform = 'translate(-50%,-50%)'; });
   }
 
   const state = {
@@ -1890,6 +1978,7 @@
     lastPresenceSend: 0,
   };
   applyTheme();
+  applyControlSettings();
 
   function freshUpgrades(){
     return {
@@ -1959,7 +2048,10 @@
     });
   }
 
+  let statsPanelReady = false;
   function setupStatsPanel(){
+    if (statsPanelReady) return;     // otherwise every rejoin stacks another click handler (one tap = several stat points)
+    statsPanelReady = true;
     byId('statsPanel').addEventListener('click', (e)=>{
       const row = e.target.closest('.stat-row');
       if (!row) return;
@@ -2564,6 +2656,7 @@
     byId('statsPanel').classList.remove('show');
     state.loadout1 = null; state.loadout7 = null; state.loadout14 = null; state.loadout20 = null; state.adminTank = null; state.drones = []; state.dronesSent = false; state.consumedDrones = {}; state.remoteDrones = {};
     state.hp = effectiveMaxHp(); state.alive = true; state.score = 0; state.streak = 0;
+    state.invincibleUntil = 0;
     state.joinedAt = Date.now();
 
     await state.room.presence({
@@ -2652,6 +2745,7 @@
       }
       state.x = sp.x; state.y = sp.y;
       state.room.presence({ x: state.x, y: state.y });
+      state.invincibleUntil = performance.now() + SPAWN_PROTECT_MS;
       if (state.bots.some(b => b.free)) hbPlaceAll();   // host-added bots spawn now that the match is live
       if (isTraining()) trInit();
     }
@@ -3088,7 +3182,7 @@
   }
 
   // ---- input ----
-  const JOY_MAX = 40; // px the nub can travel from center
+  const JOY_TRAVEL = 40 / 128; // nub travel as a fraction of the stick's width (scales with the JOYSTICK SIZE setting)
 
   function setupJoystick(rootEl, nubEl, onVec, onActive){
     let pointerId = null;
@@ -3097,6 +3191,7 @@
       const cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
       const rawX = clientX - cx, rawY = clientY - cy;
       const dist = Math.hypot(rawX, rawY);
+      const JOY_MAX = Math.max(8, rect.width * JOY_TRAVEL);
       const clamped = Math.min(dist, JOY_MAX);
       const ang = Math.atan2(rawY, rawX);
       const nx = Math.cos(ang) * clamped, ny = Math.sin(ang) * clamped;
@@ -3132,9 +3227,62 @@
     rootEl.addEventListener('lostpointercapture', ()=>{ pointerId = null; reset(); });
   }
 
+
+  // ---------------------------------------------------------------
+  // Touch tap fix. While one thumb holds a joystick, mobile browsers (iOS Safari especially) often drop the
+  // synthesized `click` for a second finger tapping a button -- that's why the HUD / stat / tank-choice buttons
+  // "did nothing" during play. We fire the click ourselves on pointerup, and swallow the native one if it still arrives.
+  // ---------------------------------------------------------------
+  (function installTouchTapFix(){
+    const TAP_SEL = 'button, .loadout-tile, .swatch, .map-card, .admin-tile, [role="button"]';
+    const downs = new Map();
+    let synth = null;   // { x, y, t } of the last click we fired ourselves
+    document.addEventListener('pointerdown', (e)=>{
+      if (e.pointerType !== 'touch') return;
+      const el = e.target && e.target.closest ? e.target.closest(TAP_SEL) : null;
+      if (el && !el.disabled && !el.closest('.joystick')) downs.set(e.pointerId, { el, x:e.clientX, y:e.clientY });
+    }, true);
+    document.addEventListener('pointercancel', (e)=>{ downs.delete(e.pointerId); }, true);
+    document.addEventListener('pointerup', (e)=>{
+      if (e.pointerType !== 'touch') return;
+      const d = downs.get(e.pointerId);
+      downs.delete(e.pointerId);
+      if (!d || !d.el.isConnected || d.el.disabled) return;
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 16) return;      // it was a drag, not a tap
+      const up = document.elementFromPoint(e.clientX, e.clientY);
+      if (!up || !(up === d.el || d.el.contains(up))) return;
+      synth = { x:e.clientX, y:e.clientY, t:performance.now() };
+      d.el.click();
+    }, true);
+    document.addEventListener('click', (e)=>{
+      if (!e.isTrusted || !synth) return;
+      if (performance.now() - synth.t < 700 && Math.hypot(e.clientX - synth.x, e.clientY - synth.y) < 24){
+        e.stopImmediatePropagation(); e.preventDefault();
+      }
+    }, true);
+  })();
+
+  let inputReady = false;
   function setupInput(){
+    if (inputReady) return;          // beginPlay() runs on every room join; the listeners only need adding once
+    inputReady = true;
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+
+    // KEYBOARD mode: mouse aims the barrel, hold left button to fire
+    const km = state.kbMouse = { x:0, y:0, has:false, down:false };
+    window.addEventListener('pointermove', (e)=>{
+      if (e.pointerType === 'touch') return;
+      km.x = e.clientX; km.y = e.clientY; km.has = true;
+    });
+    canvas.addEventListener('pointerdown', (e)=>{
+      if (e.pointerType === 'touch' || e.button !== 0 || ctrlMode() !== 'keyboard') return;
+      km.x = e.clientX; km.y = e.clientY; km.has = true; km.down = true;
+      e.preventDefault();
+    });
+    window.addEventListener('pointerup', (e)=>{ if (e.pointerType !== 'touch') km.down = false; });
+    window.addEventListener('blur', ()=>{ km.down = false; });
+    canvas.addEventListener('contextmenu', (e)=>{ if (ctrlMode() === 'keyboard') e.preventDefault(); });
 
     setupJoystick(byId('joyMove'), byId('joyMoveNub'), (x,y,mag)=>{
       state.moveVec = {x,y,mag};
@@ -3774,6 +3922,26 @@
       checkTankRamDamage();
 
       updateHazardZone();
+
+      if (ctrlMode() === 'keyboard' && state.kbMouse){
+        // KEYBOARD mode: the cursor is the aim. Barrel follows it always; holding the left button
+        // behaves like pushing the aim stick (Overlord: farther cursor = farther drone target).
+        const km = state.kbMouse;
+        const kbOver = resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) === 'overlord';
+        let ax = state.aimVec.x, ay = state.aimVec.y, amag = 0;
+        if (km.has){
+          const r = canvas.getBoundingClientRect(), sp = tankScreenPos();
+          const vx = km.x - r.left - sp.x, vy = km.y - r.top - sp.y, sd = Math.hypot(vx, vy);
+          if (sd > 3){
+            ax = vx / sd; ay = vy / sd;
+            if (!kbOver) state.turretAngle = Math.atan2(ay, ax);
+            if (km.down) amag = kbOver ? Math.min(1, Math.max(0.13, (sd / curZoom) / DRONE_CTRL_REACH)) : 1;
+          }
+        }
+        state.aimVec = { x:ax, y:ay, mag:km.down ? amag : 0 };
+        state.aimTouched = !!km.down;
+        if (state.keys['Space']) tryFire();
+      }
 
       if (state.aimVec.mag > 0.12){
         if (resolveLoadout(state.score, state.loadout7, state.loadout14, state.loadout20, state.adminTank, state.loadout1) !== 'overlord')
@@ -5527,6 +5695,11 @@
     return clamp(v, viewSize/2, arenaSize - viewSize/2);
   }
 
+  function tankScreenPos(){
+    const camX = clampCam(state.x, VIEW_W, ARENA_W), camY = clampCam(state.y, VIEW_H, ARENA_H);
+    return { x: (VIEW_W/2 + state.x - camX) * curZoom, y: (VIEW_H/2 + state.y - camY) * curZoom };
+  }
+
   function draw(){
     if (!bgCanvas) buildBackground();
     // Sniper & Hunter: ease the camera out to a 1.5x wider field of view (and back in when you change tank)
@@ -5879,6 +6052,7 @@
   function leaveSector(){
     state.adminTank = null; closeCmd(); closeAdmin(); closeLogin(); closeChat();
     state.waitingToStart = false; closeWaitPanel();
+    state.invincibleUntil = 0;   // Showdown's round-over sets this ~11 days ahead -- never carry it into the next game
     state.color = state.chosenColor;   // give back the colour the player picked (team rooms override it while inside)
     state.bots = []; state.tr = null; byId('trainBar').classList.remove('show');
     if (state.room) state.room.presence({ roomId: null, roomMeta: null, bots: null, adminTank: null, alive:false, team: null, carrying: null, color: state.chosenColor.id });
@@ -6025,7 +6199,29 @@
     byId('sensMultVal').textContent = Math.round(state.settings.sensMult * 100) + '%';
     byId('themeDarkBtn').classList.toggle('active', state.settings.theme !== 'light');
     byId('themeLightBtn').classList.toggle('active', state.settings.theme === 'light');
+    const kb = ctrlMode() === 'keyboard';
+    byId('ctrlKeyboardBtn').classList.toggle('active', kb);
+    byId('ctrlMobileBtn').classList.toggle('active', !kb);
+    byId('ctrlModeVal').textContent = kb ? 'KEYBOARD' : 'MOBILE';
+    byId('ctrlModeDesc').textContent = kb
+      ? 'WASD to move, mouse to aim, hold left click or Space to fire. On-screen sticks are hidden.'
+      : 'On-screen sticks: left moves, right aims and fires. Bigger buttons for touch screens.';
+    byId('joySizeSlider').value = Math.round(state.settings.joySize * 100);
+    byId('joySizeVal').textContent = Math.round(state.settings.joySize * 100) + '%';
+    byId('joySizeRow').classList.toggle('dim', kb);
+    byId('sensMultSlider').closest('.settings-row').classList.toggle('dim', kb);
   }
+  function setCtrlMode(m){
+    state.settings.ctrlMode = m; state.settings.ctrlChosen = true;
+    resetInputVectors(); applyControlSettings(); saveSettings(); refreshSettingsUI();
+  }
+  byId('ctrlKeyboardBtn').addEventListener('click', ()=>setCtrlMode('keyboard'));
+  byId('ctrlMobileBtn').addEventListener('click', ()=>setCtrlMode('mobile'));
+  byId('joySizeSlider').addEventListener('input', (e)=>{
+    state.settings.joySize = Number(e.target.value) / 100;
+    byId('joySizeVal').textContent = e.target.value + '%';
+    applyControlSettings(); saveSettings();
+  });
   function openSettings(){
     refreshSettingsUI();
     byId('settingsBackdrop').classList.add('show');
@@ -6073,7 +6269,9 @@
     refreshSettingsUI();
   });
   byId('settingsResetBtn').addEventListener('click', ()=>{
-    state.settings = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light' };
+    state.settings = { moveMult: 0.75, bulletMult: 0.75, sensMult: 1, theme: 'light', joySize: 1, ctrlMode: autoCtrlMode(), ctrlChosen: false };
+    resetInputVectors();
+    applyControlSettings();
     applyTheme();
     invalidateBackground();
     saveSettings();
