@@ -4254,10 +4254,11 @@
   // A bullet touched a chest on this screen. Only the SHOOTER's client reports it
   // (same trust model as every other hit in this game); everyone applies the event.
   function sdChestShot(ch, b){
-    if (b.shooterId !== state.myPeerId) return;
+    if (b.shooterId !== state.myPeerId && !isMyBotId(b.shooterId)) return;   // my own bullets, or bullets from the bots I simulate
     const dmg = b.damage || DAMAGE;
-    state.room.emit('chestHit', { roomId: state.currentSector, chestId: ch.id, dmg, shooterId: state.myPeerId, shooterName: state.name });
-    sdApplyChestDamage(ch.id, dmg, state.myPeerId, state.name);
+    const sid = b.shooterId, sname = sid === state.myPeerId ? state.name : (b.shooterName || 'BOT');
+    state.room.emit('chestHit', { roomId: state.currentSector, chestId: ch.id, dmg, shooterId: sid, shooterName: sname });
+    sdApplyChestDamage(ch.id, dmg, sid, sname);
   }
   function sdApplyChestDamage(chestId, dmg, shooterId, shooterName){
     if (!cw()) return;
@@ -4316,6 +4317,15 @@
     if (d.openerId === state.myPeerId && state.alive){
       creditKills(reward, true);
       showToast(reward === 3 ? 'LUCKY CHEST! +3 KILLS WORTH' : 'CHEST! +2 KILLS WORTH');
+    } else if (isMyBotId(d.openerId)){
+      // a bot I simulate cracked it: same payout a player gets, banked as score + upgrade points
+      const kb = state.bots.find(x => botId(x) === d.openerId);
+      if (kb && kb.alive){
+        kb.score = (kb.score || 0) + reward;
+        if (kb.hosted) for (let i = 0; i < reward; i++) hbProgress(kb);
+        botSync();
+        renderScoreStrip();
+      }
     }
   }
 
@@ -4642,6 +4652,25 @@
   }
 
   // per frame, host only
+  // nearest unbroken crate this bot can go for (sticky so it doesn't dither between two); null if none
+  function botPickCrate(b){
+    const w = cw();
+    if (!w || w.over) return null;
+    const ok = c => !c.opened && c.hp > 0 && !(state.sd && sdInSmoke(c.x, c.y));
+    if (b.crateId !== undefined){
+      const cur = w.chests.find(c => c.id === b.crateId);
+      if (cur && ok(cur)) return cur;
+    }
+    let best = null, bd = Infinity;   // no range cap: the pathfinder will walk them across the whole map
+    for (const c of w.chests){
+      if (!ok(c)) continue;
+      const d = Math.hypot(c.x - b.x, c.y - b.y);
+      if (d < bd){ bd = d; best = c; }
+    }
+    b.crateId = best ? best.id : undefined;
+    return best;
+  }
+
   // ---- IMPOSSIBLE-level brain helpers ----
   // estimate the target's velocity from its last two sightings (presence only carries positions)
   function botTrackTarget(b, tgt, now){
@@ -4727,6 +4756,11 @@
         const d = Math.hypot(t.x - b.x, t.y - b.y);
         if (d < td){ td = d; tgt = t; }
       }
+      // crates: unless an enemy is close and in sight, go break the nearest crate for points
+      let crate = null;
+      if (!(tgt && td < 450 && botLOS(b.x, b.y, tgt.x, tgt.y, TANK_R + 2))) crate = botPickCrate(b);
+      const pathFor = crate ? 'c' + crate.id : 'e';
+      if (b.pathFor !== pathFor){ b.pathFor = pathFor; b.path = null; }
       // where to go
       let mx = 0, my = 0;
       const inSmoke = sdInSmoke(b.x, b.y);
@@ -4734,6 +4768,16 @@
         const a = Math.atan2(ARENA_H / 2 - b.y, ARENA_W / 2 - b.x); mx = Math.cos(a); my = Math.sin(a);   // run from the smoke
       } else if (b.wander > now){
         mx = Math.cos(b.wanderA); my = Math.sin(b.wanderA);                                              // got stuck: shake loose
+      } else if (crate){
+        const cd = Math.hypot(crate.x - b.x, crate.y - b.y), a = Math.atan2(crate.y - b.y, crate.x - b.x);
+        if (botLOS(b.x, b.y, crate.x, crate.y, TANK_R + 2)){
+          if (cd > 190){ mx = Math.cos(a); my = Math.sin(a); }
+          else if (cd < 110){ mx = -Math.cos(a); my = -Math.sin(a); }   // too close to line up a shot
+        } else {
+          const wp = botPathStep(b, crate, now);
+          if (wp){ const pa = Math.atan2(wp.y - b.y, wp.x - b.x); mx = Math.cos(pa); my = Math.sin(pa); }
+          else { mx = Math.cos(a); my = Math.sin(a); }
+        }
       } else if (tgt && !botLOS(b.x, b.y, tgt.x, tgt.y, TANK_R + 2)){
         if (C.SMART) b.pathAt = Math.min(b.pathAt || 0, now + 150);   // keep the route fresh on a moving target
         // a wall is in the way: walk around it along a real path instead of grinding against it
@@ -4778,7 +4822,16 @@
         if (b.stuck > 0.35){ b.stuck = 0; b.wander = now + 600 + Math.random() * 500; b.wanderA = Math.random() * Math.PI * 2; b.dir = -b.dir; }
       }
       // aim + shoot
-      if (tgt && td < C.SEE){
+      if (crate){
+        const want = Math.atan2(crate.y - b.y, crate.x - b.x);
+        let da = want - b.a; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
+        b.a += Math.max(-C.TURN * dt, Math.min(C.TURN * dt, da));
+        const cd = Math.hypot(crate.x - b.x, crate.y - b.y);
+        if (cd < 700 && Math.abs(da) < 0.12 && now >= b.nextShot && botLOS(b.x, b.y, crate.x, crate.y, 4)){
+          b.nextShot = now + C.FIRE_MS * (b.up ? Math.pow(0.965, b.up.reload) : 1) * ((b.tank && LOADOUTS[b.tank] && LOADOUTS[b.tank].fireMul) || 1) * (0.9 + Math.random() * 0.4);
+          botFire(b);
+        }
+      } else if (tgt && td < C.SEE){
         let want;
         if (C.SMART){
           const bspd = BULLET_SPEED * ((b.tank && LOADOUTS[b.tank] && LOADOUTS[b.tank].speedMul) || 1) * (b.up ? 1 + b.up.bulletspeed * 0.045 : 1);
